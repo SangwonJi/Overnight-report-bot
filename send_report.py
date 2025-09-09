@@ -26,10 +26,13 @@ KEYWORDS = [
 # -----------------------------------------------------------------
 
 def check_cloudflare_outages(country_code):
-    """Cloudflare Radar API로 특정 국가의 인터넷 이상 징후를 확인합니다."""
+    """[수정됨] Cloudflare Radar API로 인터넷 이상 징후를 확인합니다. (User-Agent 헤더 추가)"""
     try:
         url = "https://api.cloudflare.com/client/v4/radar/annotations/outages?format=json&limit=20"
-        response = requests.get(url).json()
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+        }
+        response = requests.get(url, headers=headers).json()
         if not response.get('success'): return "  - 인터넷 상태 정보 조회 실패 (API 에러)"
 
         outages = response.get('result', {}).get('annotations', [])
@@ -37,7 +40,6 @@ def check_cloudflare_outages(country_code):
         for outage in outages:
             if outage.get('scope', {}).get('alpha2') == country_code.upper():
                 start_date = outage.get('startTime', 'N/A').split("T")[0]
-                event_type = outage.get('dataSource', 'N/A')
                 description = outage.get('description', 'No description')
                 outage_info += f"  - 🌐 **인터넷 이상 감지:** {description} (시작일: {start_date})\n"
         return outage_info if outage_info else "  - 최근 72시간 내 보고된 인터넷 이상 징후 없음."
@@ -45,17 +47,14 @@ def check_cloudflare_outages(country_code):
         return f"  - 인터넷 상태 조회 중 에러 발생: {e}"
 
 def get_weather_info(country_code):
-    """WeatherAPI.com API로 날씨 특보와 대기 질을 한 번에 확인합니다."""
+    # (기존 코드와 동일)
     try:
         api_key = os.environ.get("WEATHERAPI_API_KEY")
         if not api_key: return "  - (날씨 API 키 없음)", ""
-
         city = CITIES.get(country_code)
         if not city: return "  - (도시 정보 없음)", ""
-
         url = f"http://api.weatherapi.com/v1/forecast.json?key={api_key}&q={city}&days=1&aqi=yes&alerts=yes"
         response = requests.get(url).json()
-
         alerts = response.get('alerts', {}).get('alert', [])
         alert_info = ""
         if not alerts:
@@ -64,29 +63,25 @@ def get_weather_info(country_code):
             for alert in alerts:
                 event = alert.get('event', '기상 특보')
                 alert_info += f"  - 🚨 **{city}에 '{event}' 특보 발령!**\n"
-
         aqi_data = response.get('current', {}).get('air_quality', {})
         air_quality_info = "  - 대기 질 정보 없음."
         if aqi_data:
             us_epa_index = aqi_data.get('us-epa-index')
             aqi_status = {1: "좋음", 2: "보통", 3: "민감군 주의", 4: "나쁨", 5: "매우 나쁨", 6: "위험"}
             air_quality_info = f"  - 대기 질(AQI): {us_epa_index} ({aqi_status.get(us_epa_index, '알 수 없음')})"
-
         return alert_info, air_quality_info
     except Exception as e:
         error_message = f"  - 날씨/대기 질 조회 에러: {e}"
         return error_message, ""
 
 def check_for_holidays(country_code):
-    """Calendarific API로 오늘 또는 내일의 공휴일을 확인합니다."""
+    # (기존 코드와 동일)
     try:
         api_key = os.environ.get("CALENDARIFIC_API_KEY")
         if not api_key: return "  - (공휴일 API 키 없음)"
-
         today = date.today()
         url = f"https://calendarific.com/api/v2/holidays?api_key={api_key}&country={country_code}&year={today.year}&month={today.month}"
         response = requests.get(url).json()
-
         holidays = response.get('response', {}).get('holidays', [])
         tomorrow = today + timedelta(days=1)
         holiday_info = ""
@@ -101,7 +96,7 @@ def check_for_holidays(country_code):
         return f"  - 공휴일 정보 조회 에러: {e}"
 
 def check_for_earthquakes(country_code, country_name):
-    """USGS API로 지난 24시간 내 발생한 주요 지진을 확인합니다."""
+    # (기존 코드와 동일)
     try:
         url = "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/4.5_day.geojson"
         response = requests.get(url).json()
@@ -116,18 +111,26 @@ def check_for_earthquakes(country_code, country_name):
     except Exception as e:
         return f"  - 지진 정보 조회 에러: {e}"
 
-def get_comprehensive_news(country_code):
-    """NewsAPI.org를 사용하여 특정 국가의 주요 사건사고 뉴스를 가져옵니다."""
+def get_comprehensive_news(country_code, country_name):
+    """[수정됨] NewsAPI의 'everything' 엔드포인트를 사용하여 뉴스를 검색합니다."""
     try:
         api_key = os.environ.get("NEWSAPI_API_KEY")
         if not api_key: return "  - (뉴스 API 키 없음)"
         
-        query = " OR ".join(f'"{k}"' for k in KEYWORDS)
-        url = (f"https://newsapi.org/v2/top-headlines?"
-               f"country={country_code.lower()}"
-               f"&q={query}"
+        # 국가 이름과 키워드를 조합하여 더 정확한 검색어 생성
+        query_keywords = " OR ".join(KEYWORDS)
+        query = f'"{country_name}" AND ({query_keywords})'
+        
+        yesterday = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%dT%H:%M:%S')
+        
+        url = (f"https://newsapi.org/v2/everything?"
+               f"q={query}"
+               f"&from={yesterday}"
+               f"&language=en"
+               f"&sortBy=relevancy"
                f"&pageSize=3"
                f"&apiKey={api_key}")
+        
         response = requests.get(url).json()
         
         if response.get("status") != "ok": return f"  - 뉴스 API 에러: {response.get('message')}"
@@ -143,27 +146,23 @@ def get_comprehensive_news(country_code):
         return f"  - 뉴스 수집 중 에러 발생: {e}"
 
 # -----------------------------------------------------------------
-# (D) 최종 보고서 조합 함수
+# (D) 최종 보고서 조합 함수 (기존과 동일)
 # -----------------------------------------------------------------
 def get_report_content():
     today_str = datetime.now().strftime("%Y-%m-%d")
     report_parts = [f"## 🚨 글로벌 종합 모니터링 리포트 ({today_str})"]
-    
     for code, name in CITIES.items():
         report_parts.append(f"\n---\n### > {name} ({code})")
-        
         weather_alert, air_quality = get_weather_info(code)
-        
         report_parts.append(f"**- 인터넷 상태:**\n{check_cloudflare_outages(code)}")
         report_parts.append(f"**- 날씨/대기 질:**\n{weather_alert.strip()}\n{air_quality}")
         report_parts.append(f"**- 공휴일:**\n{check_for_holidays(code)}")
         report_parts.append(f"**- 지진 (규모 4.5+):**\n{check_for_earthquakes(code, name)}")
-        report_parts.append(f"**- 관련 뉴스 헤드라인:**\n{get_comprehensive_news(code)}")
-        
+        report_parts.append(f"**- 관련 뉴스 헤드라인:**\n{get_comprehensive_news(code, name)}")
     return "\n".join(report_parts)
 
 # -----------------------------------------------------------------
-# (E) Slack 전송 함수
+# (E) Slack 전송 함수 (기존과 동일)
 # -----------------------------------------------------------------
 def send_to_slack(message):
     webhook_url = os.environ.get("SLACK_WEBHOOK_URL")
@@ -181,7 +180,7 @@ def send_to_slack(message):
         exit(1)
 
 # -----------------------------------------------------------------
-# (F) 메인 실행 부분
+# (F) 메인 실행 부분 (기존과 동일)
 # -----------------------------------------------------------------
 if __name__ == "__main__":
     report_message = get_report_content()
