@@ -38,14 +38,13 @@ KEYWORDS = [
 ]
 
 # -----------------------------------------------------------------
-# (C) 데이터 수집 함수들 (내용은 동일, 간결화를 위해 일부 수정)
+# (C) 데이터 수집 함수들
 # -----------------------------------------------------------------
 
 def check_cloudflare_outages(country_code):
     try:
-        # ... (이전 코드와 동일)
         url = "https://api.cloudflare.com/client/v4/radar/annotations/outages?format=json&limit=20"
-        headers = {"User-Agent": "Mozilla/5.0 ..."}
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"}
         response = requests.get(url, headers=headers).json()
         if not response.get('success'): return "조회 실패 (API 에러)"
         outages = response.get('result', {}).get('annotations', [])
@@ -60,7 +59,6 @@ def check_cloudflare_outages(country_code):
 
 def get_weather_info(country_code):
     try:
-        # ... (이전 코드와 동일)
         api_key = os.environ.get("WEATHERAPI_API_KEY")
         if not api_key: return "(API 키 없음)"
         city = CITIES.get(country_code)
@@ -78,7 +76,6 @@ def get_weather_info(country_code):
 
 def check_for_holidays(country_code):
     try:
-        # ... (이전 코드와 동일)
         api_key = os.environ.get("CALENDARIFIC_API_KEY")
         if not api_key: return "(API 키 없음)"
         today = date.today()
@@ -98,7 +95,6 @@ def check_for_holidays(country_code):
 
 def check_for_earthquakes(country_code, country_name):
     try:
-        # ... (이전 코드와 동일)
         url = "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/4.5_day.geojson"
         response = requests.get(url).json()
         features = response.get('features', [])
@@ -113,7 +109,6 @@ def check_for_earthquakes(country_code, country_name):
 
 def get_comprehensive_news(country_code, country_name):
     try:
-        # ... (이전 코드와 동일)
         api_key = os.environ.get("NEWSAPI_API_KEY")
         if not api_key: return "(API 키 없음)"
         query_keywords = " OR ".join(KEYWORDS)
@@ -131,7 +126,7 @@ def get_comprehensive_news(country_code, country_name):
     except Exception: return "조회 에러"
 
 # -----------------------------------------------------------------
-# (D) [수정됨] 보고서 데이터를 '딕셔너리'로 생성하는 함수
+# (D) 보고서 데이터를 '딕셔너리'로 생성하는 함수
 # -----------------------------------------------------------------
 def get_report_data(country_code, country_name):
     """지정된 '한 국가'에 대한 데이터를 수집하여 딕셔너리로 반환합니다."""
@@ -162,21 +157,24 @@ def send_to_slack(country_code, country_name, report_data, is_first_message=Fals
     if is_first_message:
         today_str = datetime.now().strftime("%Y-%m-%d")
         blocks.append({"type": "header", "text": {"type": "plain_text", "text": f"🚨 글로벌 종합 모니터링 리포트 ({today_str})", "emoji": True}})
+        blocks.append({"type": "divider"})
     
     # 국가별 헤더 추가
     blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": f"*{flag} {name_ko} ({country_code})*"}})
-    blocks.append({"type": "divider"})
-
-    # 각 섹션을 필드로 추가
-    fields = []
-    for title, content in report_data.items():
-        # 내용이 비어있지 않은 경우에만 필드 추가
-        if content:
-            fields.append({"type": "mrkdwn", "text": f"*{title}:*\n{content}"})
     
-    # 필드가 하나라도 있을 경우에만 섹션 추가
-    if fields:
-        blocks.append({"type": "section", "fields": fields})
+    # [수정됨] 각 섹션을 별도의 블록으로 만들어 공백 추가
+    for title, content in report_data.items():
+        if content and not content.startswith("(API 키 없음)"): # 내용이 있는 경우에만 블록 추가
+            blocks.append({
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"*{title}:*\n{content}"
+                }
+            })
+
+    # 마지막에 구분선 추가
+    blocks.append({"type": "divider"})
 
     payload = {"blocks": blocks}
     headers = {'Content-Type': 'application/json'}
@@ -191,7 +189,7 @@ def send_to_slack(country_code, country_name, report_data, is_first_message=Fals
         return False
 
 # -----------------------------------------------------------------
-# (F) [수정됨] 메인 실행 부분
+# (F) 메인 실행 부분
 # -----------------------------------------------------------------
 print("리포트 생성을 시작합니다...")
 
@@ -199,10 +197,7 @@ is_first = True
 for code, name in CITIES.items():
     print(f"\n--- {name} ({code}) 데이터 수집 및 전송 ---")
     
-    # 1. 국가별 데이터 수집
     data = get_report_data(code, name)
-    
-    # 2. 국가별 Slack 메시지 전송
     send_to_slack(code, name, data, is_first_message=is_first)
     is_first = False
 
