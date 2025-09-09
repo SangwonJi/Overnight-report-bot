@@ -4,7 +4,6 @@ import json
 from datetime import date, timedelta, datetime
 
 # .env 파일을 읽어와 환경 변수로 설정합니다. (로컬 테스트용)
-# GitHub Actions에서는 이 부분이 없어도 Secrets를 통해 환경 변수를 읽습니다.
 try:
     from dotenv import load_dotenv
     load_dotenv()
@@ -49,7 +48,7 @@ def check_cloudflare_outages(country_code):
             if outage.get('scope', {}).get('alpha2') == country_code.upper():
                 start_date = outage.get('startTime', 'N/A').split("T")[0]
                 description = outage.get('description', 'No description')
-                outage_info += f"  - 🌐 **인터넷 이상 감지:** {description} (시작일: {start_date})\n"
+                outage_info += f"  - 🌐 *인터넷 이상 감지:* {description} (시작일: {start_date})\n"
         return outage_info if outage_info else "  - 최근 72시간 내 보고된 인터넷 이상 징후 없음."
     except Exception as e:
         return f"  - 인터넷 상태 조회 중 에러 발생: {e}"
@@ -71,7 +70,7 @@ def get_weather_info(country_code):
         else:
             for alert in alerts:
                 event = alert.get('event', '기상 특보')
-                alert_info += f"  - 🚨 **{city}에 '{event}' 특보 발령!**\n"
+                alert_info += f"  - 🚨 *{city}에 '{event}' 특보 발령!*\n"
 
         aqi_data = response.get('current', {}).get('air_quality', {})
         air_quality_info = "  - 대기 질 정보 없음."
@@ -98,9 +97,9 @@ def check_for_holidays(country_code):
         for h in holidays:
             holiday_date = datetime.fromisoformat(h['date']['iso']).date()
             if holiday_date == today:
-                holiday_info += f"  - 🔔 **오늘! '{h['name']}'** 공휴일입니다.\n"
+                holiday_info += f"  - 🔔 *오늘! '{h['name']}'* 공휴일입니다.\n"
             elif holiday_date == tomorrow:
-                holiday_info += f"  - 🔔 **내일! '{h['name']}'** 공휴일입니다.\n"
+                holiday_info += f"  - 🔔 *내일! '{h['name']}'* 공휴일입니다.\n"
         return holiday_info if holiday_info else "  - 예정된 공휴일 없음."
     except Exception as e:
         return f"  - 공휴일 정보 조회 에러: {e}"
@@ -116,7 +115,7 @@ def check_for_earthquakes(country_code, country_name):
             place = eq['properties']['place']
             if country_name.lower() in place.lower() or f" {country_code.upper()}" in place.upper():
                 mag = eq['properties']['mag']
-                earthquake_info += f"  - ⚠️ **규모 {mag} 지진 발생:** {place}\n"
+                earthquake_info += f"  - ⚠️ *규모 {mag} 지진 발생:* {place}\n"
         return earthquake_info if earthquake_info else "  - 주요 지진 없음."
     except Exception as e:
         return f"  - 지진 정보 조회 에러: {e}"
@@ -154,102 +153,27 @@ def get_comprehensive_news(country_code, country_name):
         return f"  - 뉴스 수집 중 에러 발생: {e}"
 
 # -----------------------------------------------------------------
-# (D) 최종 보고서 조합 함수
+# (D) 최종 보고서 조합 함수 (마크다운 형식 수정됨)
 # -----------------------------------------------------------------
 def get_report_content():
     today_str = datetime.now().strftime("%Y-%m-%d")
-    report_parts = [f"## 🚨 글로벌 종합 모니터링 리포트 ({today_str})"]
+    report_parts = [f"*🚨 글로벌 종합 모니터링 리포트 ({today_str})*"]
+    
     for code, name in CITIES.items():
-        report_parts.append(f"\n---\n### > {name} ({code})")
+        report_parts.append(f"\n*`{name} ({code})`*")
+        report_parts.append("---")
+        
         weather_alert, air_quality = get_weather_info(code)
-        report_parts.append(f"**- 인터넷 상태:**\n{check_cloudflare_outages(code)}")
-        report_parts.append(f"**- 날씨/대기 질:**\n{weather_alert.strip()}\n{air_quality}")
-        report_parts.append(f"**- 공휴일:**\n{check_for_holidays(code)}")
-        report_parts.append(f"**- 지진 (규모 4.5+):**\n{check_for_earthquakes(code, name)}")
-        report_parts.append(f"**- 관련 뉴스 헤드라인:**\n{get_comprehensive_news(code, name)}")
+        
+        report_parts.append(f"*- 인터넷 상태:*\n{check_cloudflare_outages(code)}")
+        report_parts.append(f"*- 날씨/대기 질:*\n{weather_alert.strip()}\n{air_quality}")
+        report_parts.append(f"*- 공휴일:*\n{check_for_holidays(code)}")
+        report_parts.append(f"*- 지진 (규모 4.5+):*\n{check_for_earthquakes(code, name)}")
+        report_parts.append(f"*- 관련 뉴스 헤드라인:*\n{get_comprehensive_news(code, name)}")
+        
     return "\n".join(report_parts)
 
 # -----------------------------------------------------------------
-# (E) Slack 전송 함수 (분할 전송 기능 포함)
+# (E) Slack 전송 함수 (Block Kit 적용 및 분할 로직 개선)
 # -----------------------------------------------------------------
-# -----------------------------------------------------------------
-# (E) Slack 전송 함수 (Block Kit 적용 최종 버전)
-# -----------------------------------------------------------------
-def send_to_slack(message):
-    webhook_url = os.environ.get("SLACK_WEBHOOK_URL")
-    if not webhook_url:
-        print("🚫 에러: SLACK_WEBHOOK_URL Secret이 설정되지 않았습니다.")
-        exit(1)
-
-    limit = 3500 # 글자 수 제한은 그대로 유지
-    lines = message.split('\n')
-    chunks = []
-    current_chunk = ""
-
-    for line in lines:
-        if len(current_chunk) + len(line) + 1 < limit:
-            current_chunk += line + "\n"
-        else:
-            chunks.append(current_chunk)
-            current_chunk = line + "\n"
-    
-    chunks.append(current_chunk)
-
-    for i, chunk in enumerate(chunks):
-        if not chunk.strip(): continue
-
-        # [수정됨] Slack Block Kit 형식으로 payload를 구성합니다.
-        # 이렇게 하면 마크다운이 정상적으로 렌더링됩니다.
-        payload = {
-            "blocks": [
-                {
-                    "type": "section",
-                    "text": {
-                        "type": "mrkdwn",
-                        "text": chunk
-                    }
-                }
-            ]
-        }
-        
-        # 첫 번째 메시지가 아닌 경우, '이어짐'을 알리는 헤더 추가
-        if i > 0 and len(chunks) > 1:
-            payload['blocks'].insert(0, {
-                "type": "context",
-                "elements": [
-                    {
-                        "type": "mrkdwn",
-                        "text": f"*(Part {i+1}/{len(chunks)})... 이전 메시지에서 이어짐*"
-                    }
-                ]
-            })
-
-        headers = {'Content-Type': 'application/json'}
-        
-        try:
-            print(f"--> {i+1}/{len(chunks)}번째 메시지 전송 중...")
-            response = requests.post(webhook_url, data=json.dumps(payload), headers=headers)
-            print(f"  - Status Code: {response.status_code}")
-            print(f"  - Response Body: {response.text}")
-            response.raise_for_status()
-            print(f"--> {i+1}번째 메시지 전송 성공!")
-        except requests.exceptions.RequestException as e:
-            print(f"❌ {i+1}번째 메시지 전송 실패: {e}")
-            exit(1)
-    
-    print("✅ 모든 Slack 메시지 전송 완료!")
-
-# -----------------------------------------------------------------
-# (F) 메인 실행 부분
-# -----------------------------------------------------------------
-
-# GitHub Actions에서 실행될 때를 위한 메인 로직
-print("리포트 생성을 시작합니다...")
-report_message = get_report_content()
-
-print("--- 생성된 리포트 내용 ---")
-print(report_message)
-print("--- 리포트 내용 끝 ---")
-
-print("\nSlack으로 전송을 시작합니다...")
-send_to_slack(report_message)
+def send_to_slack(message
