@@ -3,6 +3,14 @@ import requests
 import json
 from datetime import date, timedelta, datetime
 
+# .env 파일을 읽어와 환경 변수로 설정합니다. (로컬 테스트용)
+# GitHub Actions에서는 이 부분이 없어도 Secrets를 통해 환경 변수를 읽습니다.
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    print("dotenv 라이브러리가 설치되지 않았습니다. 로컬 테스트 시에는 pip install python-dotenv를 실행하세요.")
+
 # -----------------------------------------------------------------
 # (A) 모니터링할 국가 및 도시 목록
 # -----------------------------------------------------------------
@@ -162,10 +170,7 @@ def get_report_content():
     return "\n".join(report_parts)
 
 # -----------------------------------------------------------------
-# (E) Slack 전송 함수 (분할 전송 기능으로 업그레이드됨)
-# -----------------------------------------------------------------
-# -----------------------------------------------------------------
-# (E) Slack 전송 함수 (강력한 디버깅 모드로 임시 변경)
+# (E) Slack 전송 함수 (분할 전송 기능 포함)
 # -----------------------------------------------------------------
 def send_to_slack(message):
     webhook_url = os.environ.get("SLACK_WEBHOOK_URL")
@@ -184,46 +189,53 @@ def send_to_slack(message):
         else:
             chunks.append(current_chunk)
             current_chunk = line + "\n"
-
+    
     chunks.append(current_chunk)
 
-    print("\n--- Slack 전송 디버깅 시작 ---")
-    success_count = 0
     for i, chunk in enumerate(chunks):
         if not chunk.strip(): continue
-
-        print(f"--- [Chunk {i+1}/{len(chunks)}] 전송 시도 ---")
-        payload = {"text": chunk}
+        
+        part_info = ""
+        # 총 2개 이상으로 나뉘었을 때만 파트 정보를 추가
+        if len(chunks) > 1:
+            part_info = f" (Part {i+1}/{len(chunks)})"
+        
+        # 첫 번째 메시지에만 제목을 붙이고, 나머지는 이어지는 내용임을 표시
+        if i == 0:
+            # 원본 메시지의 첫 줄(제목)을 사용
+            chunk_title = message.split('\n')[0]
+            final_chunk = chunk
+        else:
+            chunk_title = message.split('\n')[0]
+            final_chunk = f"...(이전 메시지에서 이어짐){part_info}\n\n" + chunk
+        
+        payload = {"text": final_chunk}
         headers = {'Content-Type': 'application/json'}
-
+        
         try:
+            print(f"--> {i+1}/{len(chunks)}번째 메시지 전송 중...")
             response = requests.post(webhook_url, data=json.dumps(payload), headers=headers)
-
-            # [디버깅] Slack 서버의 응답을 모두 출력합니다.
-            print(f"  - Status Code: {response.status_code}") # 상태 코드 (200이면 정상)
-            print(f"  - Response Body: {response.text}")   # 응답 내용 ('ok'여야 정상)
-
-            if response.status_code == 200 and response.text == "ok":
-                print(f"  --> {i+1}번째 메시지 전송 성공으로 보임.")
-                success_count += 1
-            else:
-                print(f"  --> ‼️ {i+1}번째 메시지 전송에 문제가 있는 것으로 보임.")
-
+            print(f"  - Status Code: {response.status_code}")
+            print(f"  - Response Body: {response.text}")
+            response.raise_for_status()
+            print(f"--> {i+1}번째 메시지 전송 성공!")
         except requests.exceptions.RequestException as e:
-            print(f"  ❌ {i+1}번째 메시지 전송 중 네트워크 에러 발생: {e}")
+            print(f"❌ {i+1}번째 메시지 전송 실패: {e}")
             exit(1)
-
-    print(f"--- Slack 전송 디버깅 종료 ---")
-    if success_count > 0:
-         print("✅ 최소 1개 이상의 메시지가 Slack 서버에 성공적으로 전달되었습니다.")
-    else:
-         print("❌ 모든 메시지가 Slack 서버 전달에 실패한 것 같습니다.")
+    
+    print("✅ 모든 Slack 메시지 전송 완료!")
 
 # -----------------------------------------------------------------
 # (F) 메인 실행 부분
 # -----------------------------------------------------------------
-if __name__ == "__main__":
-    report_message = get_report_content()
-    print(report_message)
-    # 로컬 테스트 시 아래 줄의 주석을 풀고 .env 파일에 키를 설정하여 테스트
-    # send_to_slack(report_message)
+
+# GitHub Actions에서 실행될 때를 위한 메인 로직
+print("리포트 생성을 시작합니다...")
+report_message = get_report_content()
+
+print("--- 생성된 리포트 내용 ---")
+print(report_message)
+print("--- 리포트 내용 끝 ---")
+
+print("\nSlack으로 전송을 시작합니다...")
+send_to_slack(report_message)
