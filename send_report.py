@@ -156,6 +156,7 @@ def get_comprehensive_news(country_code, country_name):
 # (D) 최종 보고서 조합 함수 (마크다운 형식 수정됨)
 # -----------------------------------------------------------------
 def get_report_content():
+    """모든 정보 소스를 종합하여 최종 리포트를 만듭니다."""
     today_str = datetime.now().strftime("%Y-%m-%d")
     report_parts = [f"*🚨 글로벌 종합 모니터링 리포트 ({today_str})*"]
     
@@ -176,4 +177,76 @@ def get_report_content():
 # -----------------------------------------------------------------
 # (E) Slack 전송 함수 (Block Kit 적용 및 분할 로직 개선)
 # -----------------------------------------------------------------
-def send_to_slack(message
+def send_to_slack(message):
+    """Slack으로 메시지를 전송합니다. Block Kit을 사용하며 긴 메시지는 분할합니다."""
+    webhook_url = os.environ.get("SLACK_WEBHOOK_URL")
+    if not webhook_url:
+        print("🚫 에러: SLACK_WEBHOOK_URL Secret이 설정되지 않았습니다.")
+        exit(1)
+
+    limit = 3800
+    chunks = []
+    
+    # 메시지를 --- 기준으로 나누어 국가별로 분리되도록 시도
+    sections = message.split("\n---\n")
+    
+    # 첫 번째 섹션 (제목)은 항상 첫 번째 청크
+    title_chunk = sections.pop(0)
+    chunks.append(title_chunk)
+
+    current_chunk = ""
+    for section in sections:
+        # 현재 청크에 다음 섹션을 더했을 때 제한을 넘으면, 현재 청크를 저장
+        if len(current_chunk) + len(section) > limit:
+            if current_chunk:
+                chunks.append(current_chunk)
+            current_chunk = section
+        # 제한을 넘지 않으면 계속해서 섹션을 추가
+        else:
+            if not current_chunk:
+                current_chunk = section
+            else:
+                current_chunk += "\n---\n" + section
+    if current_chunk:
+        chunks.append(current_chunk)
+
+    for i, chunk in enumerate(chunks):
+        if not chunk.strip(): continue
+
+        payload = {
+            "blocks": [{"type": "section", "text": {"type": "mrkdwn", "text": chunk}}]
+        }
+        
+        if i > 0 and len(chunks) > 1:
+            payload['blocks'].insert(0, {
+                "type": "context",
+                "elements": [{"type": "mrkdwn", "text": f"*(Part {i+1}/{len(chunks)})... 이전 메시지에서 이어짐*"}]
+            })
+
+        headers = {'Content-Type': 'application/json'}
+        
+        try:
+            print(f"--> {i+1}/{len(chunks)}번째 메시지 전송 중...")
+            response = requests.post(webhook_url, data=json.dumps(payload), headers=headers)
+            print(f"  - Status Code: {response.status_code}")
+            print(f"  - Response Body: {response.text}")
+            response.raise_for_status()
+            print(f"--> {i+1}번째 메시지 전송 성공!")
+        except requests.exceptions.RequestException as e:
+            print(f"❌ {i+1}번째 메시지 전송 실패: {e}")
+            exit(1)
+    
+    print("✅ 모든 Slack 메시지 전송 완료!")
+
+# -----------------------------------------------------------------
+# (F) 메인 실행 부분 (GitHub Actions에서 항상 실행되도록 수정됨)
+# -----------------------------------------------------------------
+print("리포트 생성을 시작합니다...")
+report_message = get_report_content()
+
+print("--- 생성된 리포트 내용 ---")
+print(report_message)
+print("--- 리포트 내용 끝 ---")
+
+print("\nSlack으로 전송을 시작합니다...")
+send_to_slack(report_message)
