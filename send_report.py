@@ -19,6 +19,22 @@ CITIES = {
     'VN': 'Vietnam', 'DE': 'Germany', 'HK': 'Hong Kong'
 }
 
+# [새로 추가됨] 국가별 상세 정보 (한글 이름, 국기)
+COUNTRY_DETAILS = {
+    'IQ': {'name_ko': '이라크', 'flag': '🇮🇶'},
+    'TR': {'name_ko': '터키', 'flag': '🇹🇷'},
+    'PK': {'name_ko': '파키스탄', 'flag': '🇵🇰'},
+    'EG': {'name_ko': '이집트', 'flag': '🇪🇬'},
+    'RU': {'name_ko': '러시아', 'flag': '🇷🇺'},
+    'ID': {'name_ko': '인도네시아', 'flag': '🇮🇩'},
+    'SA': {'name_ko': '사우디아라비아', 'flag': '🇸🇦'},
+    'UZ': {'name_ko': '우즈베키스탄', 'flag': '🇺🇿'},
+    'US': {'name_ko': '미국', 'flag': '🇺🇸'},
+    'VN': {'name_ko': '베트남', 'flag': '🇻🇳'},
+    'DE': {'name_ko': '독일', 'flag': '🇩🇪'},
+    'HK': {'name_ko': '홍콩', 'flag': '🇭🇰'}
+}
+
 # -----------------------------------------------------------------
 # (B) NewsAPI에서 검색할 사건사고 키워드 목록
 # -----------------------------------------------------------------
@@ -54,34 +70,29 @@ def check_cloudflare_outages(country_code):
         return f"  - 인터넷 상태 조회 중 에러 발생: {e}"
 
 def get_weather_info(country_code):
-    """WeatherAPI.com API로 날씨 특보와 대기 질을 한 번에 확인합니다."""
+    """[수정됨] WeatherAPI.com API로 날씨 특보만 확인합니다."""
     try:
         api_key = os.environ.get("WEATHERAPI_API_KEY")
-        if not api_key: return "  - (날씨 API 키 없음)", ""
+        if not api_key: return "  - (날씨 API 키 없음)"
         city = CITIES.get(country_code)
-        if not city: return "  - (도시 정보 없음)", ""
-        url = f"http://api.weatherapi.com/v1/forecast.json?key={api_key}&q={city}&days=1&aqi=yes&alerts=yes"
+        if not city: return "  - (도시 정보 없음)"
+        
+        # [수정됨] aqi=yes 부분을 URL에서 제거
+        url = f"http://api.weatherapi.com/v1/forecast.json?key={api_key}&q={city}&days=1&aqi=no&alerts=yes"
         response = requests.get(url).json()
 
         alerts = response.get('alerts', {}).get('alert', [])
-        alert_info = ""
         if not alerts:
-            alert_info = f"  - {city} 기준, 현재 발령된 기상 특보 없음."
-        else:
-            for alert in alerts:
-                event = alert.get('event', '기상 특보')
-                alert_info += f"  - 🚨 *{city}에 '{event}' 특보 발령!*\n"
+            return f"  - {city} 기준, 현재 발령된 기상 특보 없음."
+        
+        alert_info = ""
+        for alert in alerts:
+            event = alert.get('event', '기상 특보')
+            alert_info += f"  - 🚨 *{city}에 '{event}' 특보 발령!*\n"
+        return alert_info
 
-        aqi_data = response.get('current', {}).get('air_quality', {})
-        air_quality_info = "  - 대기 질 정보 없음."
-        if aqi_data:
-            us_epa_index = aqi_data.get('us-epa-index')
-            aqi_status = {1: "좋음", 2: "보통", 3: "민감군 주의", 4: "나쁨", 5: "매우 나쁨", 6: "위험"}
-            air_quality_info = f"  - 대기 질(AQI): {us_epa_index} ({aqi_status.get(us_epa_index, '알 수 없음')})"
-        return alert_info, air_quality_info
     except Exception as e:
-        error_message = f"  - 날씨/대기 질 조회 에러: {e}"
-        return error_message, ""
+        return f"  - 날씨 정보 조회 에러: {e}"
 
 def check_for_holidays(country_code):
     """Calendarific API로 오늘 또는 내일의 공휴일을 확인합니다."""
@@ -153,19 +164,26 @@ def get_comprehensive_news(country_code, country_name):
         return f"  - 뉴스 수집 중 에러 발생: {e}"
 
 # -----------------------------------------------------------------
-# (D) 최종 보고서 조합 함수
+# (D) 최종 보고서 조합 함수 (대기 질 정보 제거됨)
 # -----------------------------------------------------------------
 def get_report_content(country_code, country_name):
     """지정된 '한 국가'에 대한 종합 리포트를 생성합니다."""
+    
+    details = COUNTRY_DETAILS.get(country_code, {})
+    name_ko = details.get('name_ko', country_name)
+    flag = details.get('flag', '🌐')
+
     report_parts = [
-        f"*`{country_name} ({country_code})`*",
+        f"*{flag} {name_ko} ({country_code})*",
         "---",
     ]
     
-    weather_alert, air_quality = get_weather_info(country_code)
+    # [수정됨] 대기 질 정보(air_quality)를 받지 않음
+    weather_alert = get_weather_info(country_code)
     
     report_parts.append(f"*- 인터넷 상태:*\n{check_cloudflare_outages(country_code)}")
-    report_parts.append(f"*- 날씨/대기 질:*\n{weather_alert.strip()}\n{air_quality}")
+    # [수정됨] 날씨 특보만 표시
+    report_parts.append(f"*- 날씨 특보:*\n{weather_alert.strip()}")
     report_parts.append(f"*- 공휴일:*\n{check_for_holidays(country_code)}")
     report_parts.append(f"*- 지진 (규모 4.5+):*\n{check_for_earthquakes(country_code, country_name)}")
     report_parts.append(f"*- 관련 뉴스 헤드라인:*\n{get_comprehensive_news(country_code, country_name)}")
@@ -204,7 +222,7 @@ def send_to_slack(message, is_first_message=False):
         return False
 
 # -----------------------------------------------------------------
-# (F) 메인 실행 부분 (수정됨)
+# (F) 메인 실행 부분
 # -----------------------------------------------------------------
 print("리포트 생성을 시작합니다...")
 
@@ -212,10 +230,8 @@ is_first = True
 for code, name in CITIES.items():
     print(f"\n--- {name} ({code}) 리포트 생성 및 전송 ---")
     
-    # [수정됨] 각 국가별로 리포트 생성 시 code와 name을 전달합니다.
     report_message = get_report_content(code, name)
     
-    # 각 국가별로 Slack 전송
     send_to_slack(report_message, is_first_message=is_first)
     is_first = False
 
