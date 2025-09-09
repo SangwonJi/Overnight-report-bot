@@ -164,13 +164,15 @@ def get_report_content():
 # -----------------------------------------------------------------
 # (E) Slack 전송 함수 (분할 전송 기능으로 업그레이드됨)
 # -----------------------------------------------------------------
+# -----------------------------------------------------------------
+# (E) Slack 전송 함수 (강력한 디버깅 모드로 임시 변경)
+# -----------------------------------------------------------------
 def send_to_slack(message):
     webhook_url = os.environ.get("SLACK_WEBHOOK_URL")
     if not webhook_url:
         print("🚫 에러: SLACK_WEBHOOK_URL Secret이 설정되지 않았습니다.")
         exit(1)
 
-    # Slack의 메시지 길이 제한 (4000자) 보다 약간 여유있게 3500자로 설정
     limit = 3500
     lines = message.split('\n')
     chunks = []
@@ -182,30 +184,40 @@ def send_to_slack(message):
         else:
             chunks.append(current_chunk)
             current_chunk = line + "\n"
-    
+
     chunks.append(current_chunk)
 
+    print("\n--- Slack 전송 디버깅 시작 ---")
+    success_count = 0
     for i, chunk in enumerate(chunks):
         if not chunk.strip(): continue
 
-        part_info = f" (Part {i+1}/{len(chunks)})"
-        # 첫 번째 메시지에만 제목을 붙이고, 나머지는 이어지는 내용임을 표시
-        if i > 0:
-            chunk = f"...(이전 메시지에서 이어짐){part_info}\n\n" + chunk
-
+        print(f"--- [Chunk {i+1}/{len(chunks)}] 전송 시도 ---")
         payload = {"text": chunk}
         headers = {'Content-Type': 'application/json'}
-        
+
         try:
-            print(f"--> {i+1}/{len(chunks)}번째 메시지 전송 중...")
             response = requests.post(webhook_url, data=json.dumps(payload), headers=headers)
-            response.raise_for_status()
-            print(f"--> {i+1}번째 메시지 전송 성공!")
+
+            # [디버깅] Slack 서버의 응답을 모두 출력합니다.
+            print(f"  - Status Code: {response.status_code}") # 상태 코드 (200이면 정상)
+            print(f"  - Response Body: {response.text}")   # 응답 내용 ('ok'여야 정상)
+
+            if response.status_code == 200 and response.text == "ok":
+                print(f"  --> {i+1}번째 메시지 전송 성공으로 보임.")
+                success_count += 1
+            else:
+                print(f"  --> ‼️ {i+1}번째 메시지 전송에 문제가 있는 것으로 보임.")
+
         except requests.exceptions.RequestException as e:
-            print(f"❌ {i+1}번째 메시지 전송 실패: {e}")
+            print(f"  ❌ {i+1}번째 메시지 전송 중 네트워크 에러 발생: {e}")
             exit(1)
-    
-    print("✅ 모든 Slack 메시지 전송 완료!")
+
+    print(f"--- Slack 전송 디버깅 종료 ---")
+    if success_count > 0:
+         print("✅ 최소 1개 이상의 메시지가 Slack 서버에 성공적으로 전달되었습니다.")
+    else:
+         print("❌ 모든 메시지가 Slack 서버 전달에 실패한 것 같습니다.")
 
 # -----------------------------------------------------------------
 # (F) 메인 실행 부분
