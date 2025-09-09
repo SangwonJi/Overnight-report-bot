@@ -172,13 +172,16 @@ def get_report_content():
 # -----------------------------------------------------------------
 # (E) Slack 전송 함수 (분할 전송 기능 포함)
 # -----------------------------------------------------------------
+# -----------------------------------------------------------------
+# (E) Slack 전송 함수 (Block Kit 적용 최종 버전)
+# -----------------------------------------------------------------
 def send_to_slack(message):
     webhook_url = os.environ.get("SLACK_WEBHOOK_URL")
     if not webhook_url:
         print("🚫 에러: SLACK_WEBHOOK_URL Secret이 설정되지 않았습니다.")
         exit(1)
 
-    limit = 3500
+    limit = 3500 # 글자 수 제한은 그대로 유지
     lines = message.split('\n')
     chunks = []
     current_chunk = ""
@@ -194,22 +197,33 @@ def send_to_slack(message):
 
     for i, chunk in enumerate(chunks):
         if not chunk.strip(): continue
+
+        # [수정됨] Slack Block Kit 형식으로 payload를 구성합니다.
+        # 이렇게 하면 마크다운이 정상적으로 렌더링됩니다.
+        payload = {
+            "blocks": [
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": chunk
+                    }
+                }
+            ]
+        }
         
-        part_info = ""
-        # 총 2개 이상으로 나뉘었을 때만 파트 정보를 추가
-        if len(chunks) > 1:
-            part_info = f" (Part {i+1}/{len(chunks)})"
-        
-        # 첫 번째 메시지에만 제목을 붙이고, 나머지는 이어지는 내용임을 표시
-        if i == 0:
-            # 원본 메시지의 첫 줄(제목)을 사용
-            chunk_title = message.split('\n')[0]
-            final_chunk = chunk
-        else:
-            chunk_title = message.split('\n')[0]
-            final_chunk = f"...(이전 메시지에서 이어짐){part_info}\n\n" + chunk
-        
-        payload = {"text": final_chunk}
+        # 첫 번째 메시지가 아닌 경우, '이어짐'을 알리는 헤더 추가
+        if i > 0 and len(chunks) > 1:
+            payload['blocks'].insert(0, {
+                "type": "context",
+                "elements": [
+                    {
+                        "type": "mrkdwn",
+                        "text": f"*(Part {i+1}/{len(chunks)})... 이전 메시지에서 이어짐*"
+                    }
+                ]
+            })
+
         headers = {'Content-Type': 'application/json'}
         
         try:
