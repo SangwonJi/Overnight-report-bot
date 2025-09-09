@@ -34,7 +34,10 @@ jobs:
 
     # 4. 파이썬 스크립트 실행
     - name: Run Python script to send report
-      # GitHub Secrets에 저장한 Webhook URL을 스크립트에 전달
+      # [중요!] 모든 Secret 키를 스크립트 환경에 전달합니다.
       env:
         SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        WEATHERAPI_API_KEY: ${{ secrets.WEATHERAPI_API_KEY }}
+        CALENDARIFIC_API_KEY: ${{ secrets.CALENDARIFIC_API_KEY }}
+        NEWSAPI_API_KEY: ${{ secrets.NEWSAPI_API_KEY }}
       run: python send_report.py
