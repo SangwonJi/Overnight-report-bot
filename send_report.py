@@ -35,11 +35,11 @@ def translate_text_with_gemini(text_to_translate):
 
 # (C) 데이터 수집 함수들
 def check_internet_anomalies(country_code):
-    """[수정됨] Cloudflare의 '트래픽 이상 징후' API를 사용합니다."""
+    """[수정됨] Cloudflare의 '트래픽 이상 징후' API를 올바른 날짜 형식으로 호출합니다."""
     try:
-        # 지난 48시간 동안의 데이터를 조회
-        date_end = datetime.now(timezone.utc).strftime('%Y-%m-%d')
-        date_start = (datetime.now(timezone.utc) - timedelta(days=2)).strftime('%Y-%m-%d')
+        # [수정됨] 날짜 형식을 국제 표준(ISO 8601)으로 변경
+        date_end = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+        date_start = (datetime.now(timezone.utc) - timedelta(days=2)).strftime('%Y-%m-%dT%H:%M:%SZ')
         
         url = f"https://api.cloudflare.com/client/v4/radar/traffic_anomalies?dateStart={date_start}&dateEnd={date_end}&location={country_code}"
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"}
@@ -55,8 +55,8 @@ def check_internet_anomalies(country_code):
         
         anomaly_info = ""
         for anomaly in anomalies:
-            start_date = anomaly.get('startDate', 'N/A').split("T")[0]
-            anomaly_info += f"🌐 *트래픽 이상 감지* (시작일: {start_date})\n"
+            start_date_str = anomaly.get('startDate', 'N/A').split("T")[0]
+            anomaly_info += f"🌐 *트래픽 이상 감지* (시작일: {start_date_str})\n"
         return anomaly_info
 
     except Exception as e:
@@ -232,8 +232,7 @@ for report in all_reports_data:
                 "text": {"type": "mrkdwn", "text": f"*{title}:*\n{content}"}
             })
     
-    # 국가별 상세 정보가 있을 때만 메시지 전송
-    if len(country_blocks) > 2: # divider와 header 외에 내용이 있을 경우
+    if len(country_blocks) > 2:
         send_to_slack(country_blocks)
 
 print("\n✅ 모든 작업 완료!")
