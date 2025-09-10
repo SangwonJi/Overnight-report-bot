@@ -20,24 +20,36 @@ NEWS_KEYWORDS = [ "protest", "accident", "incident", "disaster", "unrest", "riot
 INTERNET_KEYWORDS = ["internet outage", "blackout", "power outage", "submarine cable", "network failure", "isp down"]
 
 # (C) Gemini API를 이용한 자동 번역 함수
-def translate_text_with_gemini(text_to_translate):
+def translate_text_with_gemini(text_to_translate, context="weather alert"):
+    """Gemini API를 이용해 주어진 텍스트를 한국어로 번역합니다."""
     try:
         api_key = os.environ.get("GEMINI_API_KEY")
         if not api_key: return f"{text_to_translate} (번역 실패: API 키 없음)"
         genai.configure(api_key=api_key)
         model = genai.GenerativeModel('gemini-1.5-flash-latest')
-        prompt = f"""Translate the following single weather alert term into a single, official Korean equivalent.
-        Do not add any explanation, romanization, or markdown formatting like asterisks.
-        For example, if the input is "Thunderstorm gale", the output should be just "뇌우 강풍".
-        Input: '{text_to_translate}'"""
+        
+        # 번역의 맥락에 따라 프롬프트를 다르게 설정
+        if context == "news":
+            prompt = f"""Translate the following news headline into Korean.
+            Do not add any explanation, romanization, or markdown formatting.
+            Input: '{text_to_translate}'"""
+        else: # 기본값은 날씨 특보
+            prompt = f"""Translate the following single weather alert term into a single, official Korean equivalent.
+            Do not add any explanation, romanization, or markdown formatting.
+            For example, if the input is "Thunderstorm gale", the output should be just "뇌우 강풍".
+            Input: '{text_to_translate}'"""
+
         response = model.generate_content(prompt)
-        return response.text.strip()
+        return response.text.strip().replace("*", "")
     except Exception as e:
-        return f"{text_to_translate} (번역 에러: {e})"
+        # API 한도 초과 에러는 그대로 반환하여 원인을 명확히 함
+        if "429" in str(e):
+             return f"(번역 한도 초과)"
+        return f"{text_to_translate} (번역 에러)"
 
 # (D) 데이터 수집 함수들
 def check_internet_news(country_code, country_name):
-    """[수정됨] GNews API로 인터넷 관련 뉴스를 검색합니다."""
+    """[수정됨] GNews API로 인터넷 관련 뉴스를 검색하고 번역합니다."""
     try:
         api_key = os.environ.get("GNEWS_API_KEY")
         if not api_key: return "(API 키 없음)"
@@ -47,9 +59,13 @@ def check_internet_news(country_code, country_name):
         response = requests.get(url, timeout=10).json()
         articles = response.get('articles', [])
         if not articles: return "관련 뉴스 없음"
+        
         news_info = ""
         for article in articles:
-            news_info += f"🌐 {article.get('title', '')}\n"
+            title = article.get('title', '')
+            # [수정됨] 뉴스 헤드라인 번역 추가
+            translated_title = translate_text_with_gemini(title, context="news")
+            news_info += f"🌐 {translated_title}\n"
         return news_info
     except Exception as e:
         return f"인터넷 뉴스 수집 중 에러: {e}"
@@ -141,6 +157,8 @@ def get_summary_from_gemini(report_text):
         response = model.generate_content(prompt)
         return response.text.strip()
     except Exception as e:
+        if "429" in str(e):
+             return "* (요약 생성 실패: API 일일 사용량을 초과했습니다.)"
         return f"* (요약 생성 중 에러 발생: {e})"
 
 def get_report_data(country_code, country_name):
@@ -169,9 +187,7 @@ def send_to_slack(blocks):
         print(f"  ❌ 메시지 전송 실패: {e}")
         return False
 
-# -----------------------------------------------------------------
 # (G) 메인 실행 부분
-# -----------------------------------------------------------------
 print("리포트 생성을 시작합니다...")
 all_reports_data = []
 for code, name in CITIES.items():
@@ -214,10 +230,7 @@ for report in all_reports_data:
     
     for title, content in report['data'].items():
         if content and content.strip() and "(API 키 없음)" not in content and "조회 에러" not in content :
-            country_blocks.append({
-                "type": "section",
-                "text": {"type": "mrkdwn", "text": f"*{title}:*\n{content}"}
-            })
+            country_blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": f"*{title}:*\n{content}"}})
     
     if len(country_blocks) > 2:
         send_to_slack(country_blocks)
