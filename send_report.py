@@ -1,7 +1,7 @@
 import os
 import requests
 import json
-from datetime import date, timedelta, datetime, timezone
+from datetime import date, timedelta, datetime
 import google.generativeai as genai
 
 # .env 파일을 읽어와 환경 변수로 설정합니다. (로컬 테스트용)
@@ -9,7 +9,7 @@ try:
     from dotenv import load_dotenv
     load_dotenv()
 except ImportError:
-    pass
+    pass # GitHub Actions 환경에서는 이 라이브러리가 없어도 괜찮습니다.
 
 # -----------------------------------------------------------------
 # (A) 모니터링할 국가 및 도시 목록
@@ -27,6 +27,10 @@ COUNTRY_DETAILS = {
     'US': {'name_ko': '미국', 'flag': '🇺🇸'}, 'VN': {'name_ko': '베트남', 'flag': '🇻🇳'},
     'DE': {'name_ko': '독일', 'flag': '🇩🇪'}, 'HK': {'name_ko': '홍콩', 'flag': '🇭🇰'}
 }
+
+# -----------------------------------------------------------------
+# (B) GNews에서 검색할 사건사고 키워드 목록
+# -----------------------------------------------------------------
 KEYWORDS = [
     "protest", "accident", "incident", "disaster", "unrest", "riot", "war", 
     "conflict", "attack", "military", "clash", "rebellion", "uprising",
@@ -34,36 +38,25 @@ KEYWORDS = [
 ]
 
 # -----------------------------------------------------------------
-# (B) [새로 추가] Gemini API를 이용한 자동 번역 함수
-# -----------------------------------------------------------------
-def translate_text_with_gemini(text_to_translate):
-    """Gemini API를 이용해 주어진 텍스트를 한국어로 번역합니다."""
-    try:
-        api_key = os.environ.get("GEMINI_API_KEY")
-        if not api_key: return f"{text_to_translate} (번역 실패: API 키 없음)"
-        
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-pro')
-        
-        prompt = f"Translate the following text into Korean: '{text_to_translate}'"
-        response = model.generate_content(prompt)
-        
-        return response.text.strip()
-    except Exception:
-        return f"{text_to_translate} (번역 중 에러 발생)"
-
-# -----------------------------------------------------------------
-# (C) 데이터 수집 함수들 (업그레이드됨)
+# (C) 데이터 수집 함수들
 # -----------------------------------------------------------------
 
 def check_cloudflare_outages(country_code):
-    # (이전과 동일)
+    """Cloudflare Radar API로 인터넷 이상 징후를 확인합니다."""
     try:
         url = "https://api.cloudflare.com/client/v4/radar/annotations/outages?format=json&limit=20"
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"}
-        response = requests.get(url, headers=headers).json()
-        if not response.get('success'): return "조회 실패 (API 에러)"
-        outages = response.get('result', {}).get('annotations', [])
+        # 타임아웃을 10초로 설정하여 무한정 기다리지 않도록 방어
+        response = requests.get(url, headers=headers, timeout=10)
+        response.raise_for_status() # HTTP 에러가 있으면 여기서 중단
+        
+        response_json = response.json()
+        if not response_json.get('success'):
+            errors = response_json.get('errors', [])
+            error_msg = errors[0]['message'] if errors else 'Unknown API Error'
+            return f"조회 실패 ({error_msg})"
+
+        outages = response_json.get('result', {}).get('annotations', [])
         outage_info = ""
         for outage in outages:
             if outage.get('scope', {}).get('alpha2') == country_code.upper():
@@ -71,84 +64,66 @@ def check_cloudflare_outages(country_code):
                 description = outage.get('description', 'No description')
                 outage_info += f"🌐 *이상 감지:* {description} ({start_date})\n"
         return outage_info if outage_info else "보고된 이상 징후 없음"
-    except Exception: return "조회 중 에러 발생"
+    except requests.exceptions.RequestException as e:
+        return f"조회 중 네트워크 에러 발생: {e}"
+    except Exception as e:
+        return f"조회 중 에러 발생: {e}"
 
 def get_weather_info(country_code):
-    """[업그레이드됨] 날씨 특보를 확인하고, 외국어는 한국어로 번역합니다."""
+    """WeatherAPI.com API로 날씨 특보를 확인합니다."""
     try:
         api_key = os.environ.get("WEATHERAPI_API_KEY")
         if not api_key: return "(API 키 없음)"
         city = CITIES.get(country_code)
         if not city: return "(도시 정보 없음)"
-        
         url = f"http://api.weatherapi.com/v1/forecast.json?key={api_key}&q={city}&days=1&aqi=no&alerts=yes"
-        response = requests.get(url).json()
+        response = requests.get(url, timeout=10).json()
         alerts = response.get('alerts', {}).get('alert', [])
-
         if not alerts: return f"{city} 기준 특보 없음"
-        
         alert_info = ""
         for alert in alerts:
             event = alert.get('event', '기상 특보')
-            # 영어 알파벳이 포함되어 있는지 확인하여 외국어 여부 판단 (간단한 방식)
-            is_foreign = any(c.isalpha() for c in event)
-            if is_foreign:
-                translated_event = translate_text_with_gemini(event)
-                alert_info += f"🚨 *'{translated_event}' 특보 발령!*\n"
-            else: # 한글이나 기타 비-알파벳 문자는 그대로 표시
-                alert_info += f"🚨 *'{event}' 특보 발령!*\n"
+            alert_info += f"🚨 *'{event}' 특보 발령!*\n"
         return alert_info.strip()
-
     except Exception: return "조회 에러"
 
 def check_for_holidays(country_code):
-    """[업그레이드됨] 'National holiday' 같은 실제 공휴일만 필터링합니다."""
+    """Calendarific API로 실제 공휴일만 필터링합니다."""
     try:
         api_key = os.environ.get("CALENDARIFIC_API_KEY")
         if not api_key: return "(API 키 없음)"
-        
-        # 'National holiday', 'Public holiday' 등 실제 쉬는 날을 나타내는 타입 목록
-        VALID_HOLIDAY_TYPES = ["National holiday", "Public holiday", "Bank holiday"]
-
+        VALID_HOLIDAY_TYPES = ["National holiday", "Public holiday"]
         today = date.today()
-        url = f"https://calendarific.com/api/v2/holidays?api_key={api_key}&country={country_code}&year={today.year}" # 1년치 데이터를 한번에
-        response = requests.get(url).json()
+        url = f"https://calendarific.com/api/v2/holidays?api_key={api_key}&country={country_code}&year={today.year}"
+        response = requests.get(url, timeout=10).json()
         holidays = response.get('response', {}).get('holidays', [])
         tomorrow = today + timedelta(days=1)
         holiday_info = ""
-
         for h in holidays:
-            # 실제 공휴일 타입인지 확인
             if any(valid_type in h['type'] for valid_type in VALID_HOLIDAY_TYPES):
                 holiday_date = datetime.fromisoformat(h['date']['iso']).date()
                 if holiday_date == today:
-                    holiday_info += f"🌍 *오늘! '{h['name']}'* (공휴일)\n"
+                    holiday_info += f"🎉 *오늘! '{h['name']}'* (공휴일)\n"
                 elif holiday_date == tomorrow:
-                    holiday_info += f"🌍 *내일! '{h['name']}'* (공휴일)\n"
-        
+                    holiday_info += f"🎉 *내일! '{h['name']}'* (공휴일)\n"
         return holiday_info if holiday_info else "예정된 공휴일 없음"
     except Exception: return "조회 에러"
 
 def check_for_earthquakes(country_code, country_name):
-    """[업그레이드됨] 지진 발생 시점을 한국 시간(KST)으로 표시합니다."""
+    """USGS API로 지진 발생 시점을 한국 시간(KST)으로 표시합니다."""
     try:
         url = "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/4.5_day.geojson"
-        response = requests.get(url).json()
+        response = requests.get(url, timeout=10).json()
         features = response.get('features', [])
         earthquake_info = ""
-        
-        # KST = UTC+9
         kst = timezone(timedelta(hours=9))
-
         for eq in features:
             place = eq['properties']['place']
             if country_name.lower() in place.lower() or f" {country_code.upper()}" in place.upper():
                 mag = eq['properties']['mag']
-                # 유닉스 타임스탬프(밀리초)를 datetime 객체로 변환 후 KST로 변경
                 time_utc = datetime.fromtimestamp(eq['properties']['time'] / 1000, tz=timezone.utc)
                 time_kst = time_utc.astimezone(kst).strftime('%Y-%m-%d %H:%M KST')
                 earthquake_info += f"⚠️ *규모 {mag} ({time_kst}):* {place}\n"
-        
         return earthquake_info if earthquake_info else "주요 지진 없음"
     except Exception: return "조회 에러"
 
@@ -157,17 +132,12 @@ def get_comprehensive_news(country_code, country_name):
     try:
         api_key = os.environ.get("GNEWS_API_KEY")
         if not api_key: return "(API 키 없음)"
-        
         query_keywords = " OR ".join(f'"{k}"' for k in KEYWORDS)
         query = f'"{country_name}" AND ({query_keywords})'
-        
         url = f"https://gnews.io/api/v4/search?q={query}&lang=en&country={country_code.lower()}&max=3&token={api_key}"
-        
-        response = requests.get(url).json()
+        response = requests.get(url, timeout=10).json()
         articles = response.get('articles', [])
-        
         if not articles: return "관련 뉴스 없음"
-        
         news_info = ""
         for article in articles:
             news_info += f"• {article.get('title', '')}\n"
@@ -186,15 +156,13 @@ def get_summary_from_gemini(report_text):
         
         genai.configure(api_key=api_key)
         model = genai.GenerativeModel('gemini-pro')
-
-        prompt = f"""You are an analyst summarizing overnight global events for a mobile game manager. Based on the following raw report, please create a concise summary in Korean with a maximum of 3 bullet points. Focus only on the most critical issues that could impact game traffic. If there are no significant events, simply state that.
+        prompt = f"""You are an analyst summarizing overnight global events for a mobile game manager. Based on the following raw report, create a concise summary in Korean with a maximum of 3 bullet points. Focus on critical issues that could impact game traffic. If no significant events, state that.
 
         Raw Report:
         ---
         {report_text}
         ---
         Summary:"""
-
         response = model.generate_content(prompt)
         return response.text.strip()
     except Exception as e:
@@ -217,7 +185,7 @@ def get_report_data(country_code, country_name):
 # -----------------------------------------------------------------
 # (F) Slack Block Kit을 사용하여 메시지를 보내는 함수
 # -----------------------------------------------------------------
-def send_to_slack(message, is_first_message=False):
+def send_to_slack(message):
     """Slack으로 단일 메시지를 전송합니다."""
     webhook_url = os.environ.get("SLACK_WEBHOOK_URL")
     if not webhook_url: return False
@@ -239,6 +207,7 @@ def send_to_slack(message, is_first_message=False):
 # -----------------------------------------------------------------
 print("리포트 생성을 시작합니다...")
 
+# 1. 모든 국가의 상세 데이터를 수집합니다.
 full_report_details = []
 for code, name in CITIES.items():
     print(f"--- {name} ({code}) 데이터 수집 중 ---")
@@ -247,24 +216,28 @@ for code, name in CITIES.items():
     name_ko = details.get('name_ko', name)
     flag = details.get('flag', '🌐')
     
-    country_section = [f"*{flag} {name_ko} ({code})*"]
+    country_section_parts = [f"*{flag} {name_ko} ({code})*"]
     for title, content in data.items():
         if content:
-            country_section.append(f"*{title}:*\n{content}")
-    full_report_details.append("\n".join(country_section))
+            country_section_parts.append(f"*{title}:*\n{content}")
+    full_report_details.append("\n".join(country_section_parts))
 
 full_report_text = "\n\n---\n\n".join(full_report_details)
 
+# 2. Gemini API를 호출하여 전체 내용에 대한 요약을 생성합니다.
 print("\nGemini API로 요약 생성 중...")
 summary = get_summary_from_gemini(full_report_text)
 
+# 3. 최종 리포트 메시지 조합
 today_str = datetime.now().strftime("%Y-%m-%d")
 title = f"*🚨 글로벌 종합 모니터링 리포트 ({today_str})*"
 summary_section = f"*주요 이슈 요약:*\n{summary}"
 
+# 4. Slack으로 순차적 전송
 print("\nSlack으로 전송을 시작합니다...")
 send_to_slack(f"{title}\n{summary_section}")
 
+# 상세 내용은 국가별로 나누어 전송 (메시지 길이 제한 회피)
 for detail_part in full_report_details:
     send_to_slack(f"---\n{detail_part}")
 
