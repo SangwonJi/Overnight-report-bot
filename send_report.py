@@ -11,9 +11,10 @@ try:
 except ImportError:
     pass
 
-# (A) 모니터링할 국가 및 도시 목록
+# (A) 모니터링할 국가, 도시, 대륙 목록
 CITIES = { 'IQ': 'Iraq', 'TR': 'Turkey', 'PK': 'Pakistan', 'EG': 'Egypt', 'RU': 'Russia', 'ID': 'Indonesia', 'SA': 'Saudi Arabia', 'UZ': 'Uzbekistan', 'US': 'United States', 'VN': 'Vietnam', 'DE': 'Germany', 'HK': 'Hong Kong' }
 COUNTRY_DETAILS = { 'IQ': {'name_ko': '이라크', 'flag': '🇮🇶'}, 'TR': {'name_ko': '터키', 'flag': '🇹🇷'}, 'PK': {'name_ko': '파키스탄', 'flag': '🇵🇰'}, 'EG': {'name_ko': '이집트', 'flag': '🇪🇬'}, 'RU': {'name_ko': '러시아', 'flag': '🇷🇺'}, 'ID': {'name_ko': '인도네시아', 'flag': '🇮🇩'}, 'SA': {'name_ko': '사우디아라비아', 'flag': '🇸🇦'}, 'UZ': {'name_ko': '우즈베키스탄', 'flag': '🇺🇿'}, 'US': {'name_ko': '미국', 'flag': '🇺🇸'}, 'VN': {'name_ko': '베트남', 'flag': '🇻🇳'}, 'DE': {'name_ko': '독일', 'flag': '🇩🇪'}, 'HK': {'name_ko': '홍콩', 'flag': '🇭🇰'} }
+CONTINENTS = ["Middle East", "Europe", "Asia", "North America"] # [새로 추가]
 
 # (B) GNews에서 검색할 키워드 목록
 NEWS_KEYWORDS = [ "protest", "accident", "incident", "disaster", "unrest", "riot", "war", "conflict", "attack", "military", "clash", "rebellion", "uprising", "flood", "earthquake" ]
@@ -21,35 +22,25 @@ INTERNET_KEYWORDS = ["internet outage", "blackout", "power outage", "submarine c
 
 # (C) Gemini API를 이용한 자동 번역 함수
 def translate_text_with_gemini(text_to_translate, context="weather alert"):
-    """Gemini API를 이용해 주어진 텍스트를 한국어로 번역합니다."""
     try:
         api_key = os.environ.get("GEMINI_API_KEY")
         if not api_key: return f"{text_to_translate} (번역 실패: API 키 없음)"
         genai.configure(api_key=api_key)
         model = genai.GenerativeModel('gemini-1.5-flash-latest')
         
-        # 번역의 맥락에 따라 프롬프트를 다르게 설정
         if context == "news":
-            prompt = f"""Translate the following news headline into Korean.
-            Do not add any explanation, romanization, or markdown formatting.
-            Input: '{text_to_translate}'"""
-        else: # 기본값은 날씨 특보
-            prompt = f"""Translate the following single weather alert term into a single, official Korean equivalent.
-            Do not add any explanation, romanization, or markdown formatting.
-            For example, if the input is "Thunderstorm gale", the output should be just "뇌우 강풍".
-            Input: '{text_to_translate}'"""
+            prompt = f"""Translate the following news headline into Korean. Do not add any explanation, romanization, or markdown formatting. Input: '{text_to_translate}'"""
+        else:
+            prompt = f"""Translate the following single weather alert term into a single, official Korean equivalent. Do not add any explanation, romanization, or markdown formatting. For example, if the input is "Thunderstorm gale", the output should be just "뇌우 강풍". Input: '{text_to_translate}'"""
 
         response = model.generate_content(prompt)
         return response.text.strip().replace("*", "")
     except Exception as e:
-        # API 한도 초과 에러는 그대로 반환하여 원인을 명확히 함
-        if "429" in str(e):
-             return f"(번역 한도 초과)"
+        if "429" in str(e): return f"(번역 한도 초과)"
         return f"{text_to_translate} (번역 에러)"
 
 # (D) 데이터 수집 함수들
 def check_internet_news(country_code, country_name):
-    """[수정됨] GNews API로 인터넷 관련 뉴스를 검색하고 번역합니다."""
     try:
         api_key = os.environ.get("GNEWS_API_KEY")
         if not api_key: return "(API 키 없음)"
@@ -59,11 +50,9 @@ def check_internet_news(country_code, country_name):
         response = requests.get(url, timeout=10).json()
         articles = response.get('articles', [])
         if not articles: return "관련 뉴스 없음"
-        
         news_info = ""
         for article in articles:
             title = article.get('title', '')
-            # [수정됨] 뉴스 헤드라인 번역 추가
             translated_title = translate_text_with_gemini(title, context="news")
             news_info += f"🌐 {translated_title}\n"
         return news_info
@@ -143,6 +132,27 @@ def get_comprehensive_news(country_code, country_name):
     except Exception as e:
         return f"뉴스 수집 중 에러 발생: {e}"
 
+def get_continental_news(continent_name):
+    """[새로운 기능] GNews API로 대륙별 주요 뉴스를 검색합니다."""
+    try:
+        api_key = os.environ.get("GNEWS_API_KEY")
+        if not api_key: return "(API 키 없음)"
+        # '기타 주요 뉴스'와 키워드 중복을 피하기 위해 일부만 사용
+        continental_keywords = ["protest", "disaster", "war", "conflict", "internet outage"]
+        query_keywords = " OR ".join(f'"{k}"' for k in continental_keywords)
+        query = f'"{continent_name}" AND ({query_keywords})'
+        
+        url = f"https://gnews.io/api/v4/search?q={query}&lang=en&max=3&token={api_key}"
+        response = requests.get(url, timeout=10).json()
+        articles = response.get('articles', [])
+        if not articles: return "관련 뉴스 없음"
+        news_info = ""
+        for article in articles:
+            news_info += f"• {article.get('title', '')}\n"
+        return news_info
+    except Exception as e:
+        return f"대륙별 뉴스 수집 중 에러: {e}"
+
 def get_summary_from_gemini(report_text):
     try:
         api_key = os.environ.get("GEMINI_API_KEY")
@@ -157,12 +167,11 @@ def get_summary_from_gemini(report_text):
         response = model.generate_content(prompt)
         return response.text.strip()
     except Exception as e:
-        if "429" in str(e):
-             return "* (요약 생성 실패: API 일일 사용량을 초과했습니다.)"
+        if "429" in str(e): return "* (요약 생성 실패: API 일일 사용량을 초과했습니다.)"
         return f"* (요약 생성 중 에러 발생: {e})"
 
+# (E) 보고서 데이터를 '딕셔-너리'로 생성하는 함수
 def get_report_data(country_code, country_name):
-    """지정된 '한 국가'에 대한 데이터를 수집하여 딕셔너리로 반환합니다."""
     report_data = {
         "인터넷 상태": check_internet_news(country_code, country_name),
         "날씨 특보": get_weather_info(country_code),
@@ -172,8 +181,8 @@ def get_report_data(country_code, country_name):
     }
     return report_data
 
+# (F) Slack Block Kit을 사용하여 메시지를 보내는 함수
 def send_to_slack(blocks):
-    """Block Kit 블록 리스트를 받아 Slack으로 메시지를 전송합니다."""
     webhook_url = os.environ.get("SLACK_WEBHOOK_URL")
     if not webhook_url: return False
     payload = {"blocks": blocks}
@@ -234,5 +243,21 @@ for report in all_reports_data:
     
     if len(country_blocks) > 2:
         send_to_slack(country_blocks)
+
+# [새로 추가됨] 대륙별 뉴스 리포트 생성 및 전송
+print("\n대륙별 뉴스를 전송합니다...")
+continental_news_parts = []
+for continent in CONTINENTS:
+    news = get_continental_news(continent)
+    if news != "관련 뉴스 없음":
+        continental_news_parts.append(f"*{continent} 주요 뉴스:*\n{news}")
+
+if continental_news_parts:
+    continental_blocks = [
+        {"type": "divider"},
+        {"type": "header", "text": {"type": "plain_text", "text": "🗺️ 대륙별 주요 뉴스 요약", "emoji": True}},
+        {"type": "section", "text": {"type": "mrkdwn", "text": "\n\n".join(continental_news_parts)}}
+    ]
+    send_to_slack(continental_blocks)
 
 print("\n✅ 모든 작업 완료!")
