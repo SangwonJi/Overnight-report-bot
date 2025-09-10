@@ -14,7 +14,8 @@ except ImportError:
 # (A) 모니터링할 국가 및 도시 목록
 CITIES = { 'IQ': 'Iraq', 'TR': 'Turkey', 'PK': 'Pakistan', 'EG': 'Egypt', 'RU': 'Russia', 'ID': 'Indonesia', 'SA': 'Saudi Arabia', 'UZ': 'Uzbekistan', 'US': 'United States', 'VN': 'Vietnam', 'DE': 'Germany', 'HK': 'Hong Kong' }
 COUNTRY_DETAILS = { 'IQ': {'name_ko': '이라크', 'flag': '🇮🇶'}, 'TR': {'name_ko': '터키', 'flag': '🇹🇷'}, 'PK': {'name_ko': '파키스탄', 'flag': '🇵🇰'}, 'EG': {'name_ko': '이집트', 'flag': '🇪🇬'}, 'RU': {'name_ko': '러시아', 'flag': '🇷🇺'}, 'ID': {'name_ko': '인도네시아', 'flag': '🇮🇩'}, 'SA': {'name_ko': '사우디아라비아', 'flag': '🇸🇦'}, 'UZ': {'name_ko': '우즈베키스탄', 'flag': '🇺🇿'}, 'US': {'name_ko': '미국', 'flag': '🇺🇸'}, 'VN': {'name_ko': '베트남', 'flag': '🇻🇳'}, 'DE': {'name_ko': '독일', 'flag': '🇩🇪'}, 'HK': {'name_ko': '홍콩', 'flag': '🇭🇰'} }
-KEYWORDS = [ "protest", "accident", "incident", "disaster", "unrest", "riot", "war", "conflict", "attack", "military", "clash", "rebellion", "uprising", "internet outage", "power outage", "flood", "earthquake" ]
+NEWS_KEYWORDS = [ "protest", "accident", "incident", "disaster", "unrest", "riot", "war", "conflict", "attack", "military", "clash", "rebellion", "uprising", "flood", "earthquake" ]
+INTERNET_KEYWORDS = ["internet outage", "blackout", "power outage", "submarine cable", "network failure"]
 
 # (B) Gemini API를 이용한 자동 번역 함수
 def translate_text_with_gemini(text_to_translate):
@@ -23,7 +24,7 @@ def translate_text_with_gemini(text_to_translate):
         if not api_key: return f"{text_to_translate} (번역 실패: API 키 없음)"
         genai.configure(api_key=api_key)
         model = genai.GenerativeModel('gemini-1.5-flash-latest')
-        prompt = f"""Translate the following single term or phrase into a single, official Korean equivalent.
+        prompt = f"""Translate the following single weather alert term into a single, official Korean equivalent.
         Do not add any explanation, romanization, or markdown formatting like asterisks.
         For example, if the input is "Thunderstorm gale", the output should be just "뇌우 강풍".
         Input: '{text_to_translate}'"""
@@ -33,31 +34,31 @@ def translate_text_with_gemini(text_to_translate):
         return f"{text_to_translate} (번역 에러: {e})"
 
 # (C) 데이터 수집 함수들
-def check_cloudflare_outages(country_code):
-    """[수정됨] Cloudflare의 인터넷 상태 설명을 한국어로 번역합니다."""
+def check_internet_anomalies(country_code):
+    """[수정됨] Cloudflare의 '트래픽 이상 징후' API를 사용합니다."""
     try:
-        url = "https://api.cloudflare.com/client/v4/radar/events"
+        # 지난 48시간 동안의 데이터를 조회
+        date_end = datetime.now(timezone.utc).strftime('%Y-%m-%d')
+        date_start = (datetime.now(timezone.utc) - timedelta(days=2)).strftime('%Y-%m-%d')
+        
+        url = f"https://api.cloudflare.com/client/v4/radar/traffic_anomalies?dateStart={date_start}&dateEnd={date_end}&location={country_code}"
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"}
         response = requests.get(url, headers=headers, timeout=15)
         response.raise_for_status()
         response_json = response.json()
         if not response_json.get('success'):
             return "조회 실패 (API 에러)"
-        events = response_json.get('result', {}).get('events', [])
-        event_info = ""
-        one_day_ago = datetime.now(timezone.utc) - timedelta(days=1)
-        for event in events:
-            if country_code.upper() in event.get('locations_alpha2', []):
-                event_time_str = event.get('startTime')
-                if event_time_str:
-                    event_time = datetime.fromisoformat(event_time_str.replace("Z", "+00:00"))
-                    if event_time > one_day_ago:
-                        event_date = event_time.strftime("%Y-%m-%d")
-                        description = event.get('description', 'No description')
-                        # [수정됨] 번역 함수 호출
-                        translated_description = translate_text_with_gemini(description)
-                        event_info += f"🌐 *이벤트 감지:* {translated_description} ({event_date})\n"
-        return event_info if event_info else "보고된 주요 인터넷 이벤트 없음"
+        
+        anomalies = response_json.get('result', {}).get('trafficAnomalies', [])
+        if not anomalies:
+            return "보고된 트래픽 이상 징후 없음"
+        
+        anomaly_info = ""
+        for anomaly in anomalies:
+            start_date = anomaly.get('startDate', 'N/A').split("T")[0]
+            anomaly_info += f"🌐 *트래픽 이상 감지* (시작일: {start_date})\n"
+        return anomaly_info
+
     except Exception as e:
         return f"조회 중 에러 발생: {e}"
 
@@ -121,7 +122,7 @@ def get_comprehensive_news(country_code, country_name):
     try:
         api_key = os.environ.get("GNEWS_API_KEY")
         if not api_key: return "(API 키 없음)"
-        query_keywords = " OR ".join(f'"{k}"' for k in KEYWORDS)
+        query_keywords = " OR ".join(f'"{k}"' for k in NEWS_KEYWORDS)
         query = f'"{country_name}" AND ({query_keywords})'
         url = f"https://gnews.io/api/v4/search?q={query}&lang=en&country={country_code.lower()}&max=3&token={api_key}"
         response = requests.get(url, timeout=10).json()
@@ -159,7 +160,7 @@ def get_summary_from_gemini(report_text):
 def get_report_data(country_code, country_name):
     """지정된 '한 국가'에 대한 데이터를 수집하여 딕셔너리로 반환합니다."""
     report_data = {
-        "인터넷 상태": check_cloudflare_outages(country_code),
+        "인터넷 상태": check_internet_anomalies(country_code),
         "날씨 특보": get_weather_info(country_code),
         "공휴일": check_for_holidays(country_code),
         "지진 (규모 4.5+)": check_for_earthquakes(country_code, country_name),
@@ -231,6 +232,8 @@ for report in all_reports_data:
                 "text": {"type": "mrkdwn", "text": f"*{title}:*\n{content}"}
             })
     
-    send_to_slack(country_blocks)
+    # 국가별 상세 정보가 있을 때만 메시지 전송
+    if len(country_blocks) > 2: # divider와 header 외에 내용이 있을 경우
+        send_to_slack(country_blocks)
 
 print("\n✅ 모든 작업 완료!")
