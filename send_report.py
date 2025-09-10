@@ -22,8 +22,8 @@ def translate_text_with_gemini(text_to_translate):
         api_key = os.environ.get("GEMINI_API_KEY")
         if not api_key: return f"{text_to_translate} (번역 실패: API 키 없음)"
         genai.configure(api_key=api_key)
-        # [수정됨] 안정적인 모델 이름으로 변경
-        model = genai.GenerativeModel('gemini-1.0-pro')
+        # [수정됨] 최신 모델 이름으로 변경
+        model = genai.GenerativeModel('gemini-1.5-flash-latest')
         prompt = f"Translate the following weather alert text into Korean. Be concise.: '{text_to_translate}'"
         response = model.generate_content(prompt)
         return response.text.strip().replace("*", "")
@@ -33,11 +33,11 @@ def translate_text_with_gemini(text_to_translate):
 # (C) 데이터 수집 함수들
 def check_cloudflare_outages(country_code):
     try:
-        # [수정됨] 날짜 형식을 더 명확하게 지정 (초를 00으로 고정)
-        yesterday_str = (datetime.now(timezone.utc) - timedelta(days=1)).strftime('%Y-%m-%dT%H:%M:00Z')
-        url = f"https://api.cloudflare.com/client/v4/radar/events?dateStart={yesterday_str}&limit=100"
+        yesterday_str = (datetime.now(timezone.utc) - timedelta(days=1)).strftime('%Y-%m-%dT%H:%M:%SZ')
+        # [수정됨] limit 파라미터 제거
+        url = f"https://api.cloudflare.com/client/v4/radar/events?dateStart={yesterday_str}"
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"}
-        response = requests.get(url, headers=headers, timeout=10)
+        response = requests.get(url, headers=headers, timeout=15)
         response.raise_for_status()
         response_json = response.json()
         if not response_json.get('success'):
@@ -66,8 +66,8 @@ def get_weather_info(country_code):
         alerts = response.get('alerts', {}).get('alert', [])
         if not alerts: return f"{city} 기준 특보 없음"
         alert_info = ""
-        for alert in alerts:
-            event = alert.get('event', '기상 특보')
+        unique_alerts = {alert.get('event') for alert in alerts} # 중복 제거
+        for event in unique_alerts:
             translated_event = translate_text_with_gemini(event)
             alert_info += f"🚨 *'{translated_event}' 특보 발령!*\n"
         return alert_info.strip()
@@ -134,8 +134,8 @@ def get_summary_from_gemini(report_text):
         api_key = os.environ.get("GEMINI_API_KEY")
         if not api_key: return "* (요약/번역 기능 비활성화: Gemini API 키 없음)"
         genai.configure(api_key=api_key)
-        # [수정됨] 안정적인 모델 이름으로 변경
-        model = genai.GenerativeModel('gemini-1.0-pro')
+        # [수정됨] 최신 모델 이름으로 변경
+        model = genai.GenerativeModel('gemini-1.5-flash-latest')
         prompt = f"""You are an analyst summarizing overnight global events for a mobile game manager. Based on the following raw report, please create a concise summary in Korean with a maximum of 3 bullet points. Focus only on the most critical issues that could impact game traffic. If there are no significant events, simply state that.
         Raw Report: --- {report_text} --- Summary:"""
         response = model.generate_content(prompt)
@@ -169,55 +169,29 @@ def send_to_slack(message):
         print(f"  ❌ 메시지 전송 실패: {e}")
         return False
 
-# -----------------------------------------------------------------
-# (G) 메인 실행 부분 (메시지 포맷팅 개선 버전)
-# -----------------------------------------------------------------
+# (G) 메인 실행 부분
 print("리포트 생성을 시작합니다...")
-
-# 1. 모든 국가의 상세 데이터를 먼저 수집합니다.
-all_reports_data = []
+full_report_details = []
 for code, name in CITIES.items():
     print(f"--- {name} ({code}) 데이터 수집 중 ---")
-    report_data = get_report_data(code, name)
-    all_reports_data.append({'code': code, 'name': name, 'data': report_data})
-
-# 2. 수집된 전체 데이터를 바탕으로 Gemini 요약을 생성합니다.
-full_report_text_for_summary = ""
-for report in all_reports_data:
-    details = COUNTRY_DETAILS.get(report['code'], {})
-    name_ko = details.get('name_ko', report['name'])
+    data = get_report_data(code, name)
+    details = COUNTRY_DETAILS.get(code, {})
+    name_ko = details.get('name_ko', name)
     flag = details.get('flag', '🌐')
-    
-    report_section = [f"*{flag} {name_ko} ({report['code']})*"]
-    for title, content in report['data'].items():
-        if content:
-            report_section.append(f"*{title}:*\n{content}")
-    full_report_text_for_summary += "\n".join(report_section) + "\n\n"
+    country_section = [f"*{flag} {name_ko} ({code})*"]
+    for title, content in data.items():
+        if content: country_section.append(f"*{title}:*\n{content}")
+    full_report_details.append("\n".join(country_section))
 
+full_report_text = "\n\n---\n\n".join(full_report_details)
 print("\nGemini API로 요약 생성 중...")
-summary = get_summary_from_gemini(full_report_text_for_summary)
+summary = get_summary_from_gemini(full_report_text)
 
-# 3. Slack으로 요약 리포트 전송
 today_str = datetime.now().strftime("%Y-%m-%d")
 title = f"*🚨 글로벌 종합 모니터링 리포트 ({today_str})*"
 summary_section = f"*주요 이슈 요약:*\n{summary}"
+print("\nSlack으로 전송을 시작합니다...")
 send_to_slack(f"{title}\n{summary_section}")
-
-# 4. 각 국가별 상세 리포트를 '카드' 형태로 순차 전송
-print("\n국가별 상세 리포트를 전송합니다...")
-for report in all_reports_data:
-    details = COUNTRY_DETAILS.get(report['code'], {})
-    name_ko = details.get('name_ko', report['name'])
-    flag = details.get('flag', '🌐')
-    
-    country_card_parts = [
-        "---", # 깔끔한 구분선
-        f"*{flag} {name_ko} ({report['code']})*"
-    ]
-    for title, content in report['data'].items():
-        if content:
-            country_card_parts.append(f"*{title}:*\n{content}")
-
-    send_to_slack("\n".join(country_card_parts))
-
+for detail_part in full_report_details:
+    send_to_slack(f"---\n{detail_part}")
 print("\n✅ 모든 작업 완료!")
