@@ -14,55 +14,44 @@ except ImportError:
 # (A) 모니터링할 국가 및 도시 목록
 CITIES = { 'IQ': 'Iraq', 'TR': 'Turkey', 'PK': 'Pakistan', 'EG': 'Egypt', 'RU': 'Russia', 'ID': 'Indonesia', 'SA': 'Saudi Arabia', 'UZ': 'Uzbekistan', 'US': 'United States', 'VN': 'Vietnam', 'DE': 'Germany', 'HK': 'Hong Kong' }
 COUNTRY_DETAILS = { 'IQ': {'name_ko': '이라크', 'flag': '🇮🇶'}, 'TR': {'name_ko': '터키', 'flag': '🇹🇷'}, 'PK': {'name_ko': '파키스탄', 'flag': '🇵🇰'}, 'EG': {'name_ko': '이집트', 'flag': '🇪🇬'}, 'RU': {'name_ko': '러시아', 'flag': '🇷🇺'}, 'ID': {'name_ko': '인도네시아', 'flag': '🇮🇩'}, 'SA': {'name_ko': '사우디아라비아', 'flag': '🇸🇦'}, 'UZ': {'name_ko': '우즈베키스탄', 'flag': '🇺🇿'}, 'US': {'name_ko': '미국', 'flag': '🇺🇸'}, 'VN': {'name_ko': '베트남', 'flag': '🇻🇳'}, 'DE': {'name_ko': '독일', 'flag': '🇩🇪'}, 'HK': {'name_ko': '홍콩', 'flag': '🇭🇰'} }
-KEYWORDS = [ "protest", "accident", "incident", "disaster", "unrest", "riot", "war", "conflict", "attack", "military", "clash", "rebellion", "uprising", "internet outage", "power outage", "flood", "earthquake" ]
 
-# (B) Gemini API를 이용한 자동 번역 함수
+# (B) GNews에서 검색할 키워드 목록
+NEWS_KEYWORDS = [ "protest", "accident", "incident", "disaster", "unrest", "riot", "war", "conflict", "attack", "military", "clash", "rebellion", "uprising", "flood", "earthquake" ]
+INTERNET_KEYWORDS = ["internet outage", "blackout", "power outage", "submarine cable", "network failure"]
+
+# (C) 데이터 수집 함수들
 def translate_text_with_gemini(text_to_translate):
-    """[수정됨] Gemini API 프롬프트를 개선하여 더 깔끔한 번역 결과를 얻습니다."""
     try:
         api_key = os.environ.get("GEMINI_API_KEY")
         if not api_key: return f"{text_to_translate} (번역 실패: API 키 없음)"
         genai.configure(api_key=api_key)
         model = genai.GenerativeModel('gemini-1.5-flash-latest')
-        
-        # [수정됨] 더 구체적이고 명확한 프롬프트
         prompt = f"""Translate the following single weather alert term into a single, official Korean equivalent.
         Do not add any explanation, romanization, or markdown formatting like asterisks.
         For example, if the input is "Thunderstorm gale", the output should be just "뇌우 강풍".
         Input: '{text_to_translate}'"""
-        
         response = model.generate_content(prompt)
         return response.text.strip()
     except Exception as e:
         return f"{text_to_translate} (번역 에러: {e})"
 
-# (C) 데이터 수집 함수들
-def check_cloudflare_outages(country_code):
-    """[수정됨] Cloudflare Radar API의 URL을 파라미터 없이 호출하여 안정성을 높입니다."""
+def check_internet_news(country_code, country_name):
+    """[새로운 기능] GNews API로 인터넷 관련 뉴스를 검색합니다."""
     try:
-        url = "https://api.cloudflare.com/client/v4/radar/events"
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"}
-        response = requests.get(url, headers=headers, timeout=15)
-        response.raise_for_status()
-        response_json = response.json()
-        if not response_json.get('success'):
-            return "조회 실패 (API 에러)"
-        events = response_json.get('result', {}).get('events', [])
-        event_info = ""
-        # 지난 24시간 내 이벤트만 필터링
-        one_day_ago = datetime.now(timezone.utc) - timedelta(days=1)
-        for event in events:
-            if country_code.upper() in event.get('locations_alpha2', []):
-                event_time_str = event.get('startTime')
-                if event_time_str:
-                    event_time = datetime.fromisoformat(event_time_str.replace("Z", "+00:00"))
-                    if event_time > one_day_ago:
-                        event_date = event_time.strftime("%Y-%m-%d")
-                        description = event.get('description', 'No description')
-                        event_info += f"🌐 *이벤트 감지:* {description} ({event_date})\n"
-        return event_info if event_info else "보고된 주요 인터넷 이벤트 없음"
+        api_key = os.environ.get("GNEWS_API_KEY")
+        if not api_key: return "(API 키 없음)"
+        query_keywords = " OR ".join(f'"{k}"' for k in INTERNET_KEYWORDS)
+        query = f'"{country_name}" AND ({query_keywords})'
+        url = f"https://gnews.io/api/v4/search?q={query}&lang=en&country={country_code.lower()}&max=2&token={api_key}"
+        response = requests.get(url, timeout=10).json()
+        articles = response.get('articles', [])
+        if not articles: return "관련 뉴스 없음"
+        news_info = ""
+        for article in articles:
+            news_info += f"🌐 {article.get('title', '')}\n"
+        return news_info
     except Exception as e:
-        return f"조회 중 에러 발생: {e}"
+        return f"인터넷 뉴스 수집 중 에러: {e}"
 
 def get_weather_info(country_code):
     try:
@@ -124,7 +113,7 @@ def get_comprehensive_news(country_code, country_name):
     try:
         api_key = os.environ.get("GNEWS_API_KEY")
         if not api_key: return "(API 키 없음)"
-        query_keywords = " OR ".join(f'"{k}"' for k in KEYWORDS)
+        query_keywords = " OR ".join(f'"{k}"' for k in NEWS_KEYWORDS)
         query = f'"{country_name}" AND ({query_keywords})'
         url = f"https://gnews.io/api/v4/search?q={query}&lang=en&country={country_code.lower()}&max=3&token={api_key}"
         response = requests.get(url, timeout=10).json()
@@ -144,8 +133,18 @@ def get_summary_from_gemini(report_text):
         if not api_key: return "* (요약/번역 기능 비활성화: Gemini API 키 없음)"
         genai.configure(api_key=api_key)
         model = genai.GenerativeModel('gemini-1.5-flash-latest')
-        prompt = f"""You are an analyst summarizing overnight global events for a mobile game manager. Based on the following raw report, please create a concise summary in Korean with a maximum of 3 bullet points. Focus only on the most critical issues that could impact game traffic. If there are no significant events, simply state that.
-        Raw Report: --- {report_text} --- Summary:"""
+        
+        # [수정됨] 글머리 기호를 '-'로 사용하도록 프롬프트에 명시
+        prompt = f"""You are an analyst summarizing overnight global events for a mobile game manager. Based on the following raw report, please create a concise summary in Korean with a maximum of 3 bullet points.
+        Please use a hyphen (-) for bullet points, not an asterisk (*).
+        Focus only on the most critical issues that could impact game traffic. If there are no significant events, simply state that.
+
+        Raw Report:
+        ---
+        {report_text}
+        ---
+        Summary:"""
+        
         response = model.generate_content(prompt)
         return response.text.strip()
     except Exception as e:
@@ -155,22 +154,19 @@ def get_summary_from_gemini(report_text):
 def get_report_data(country_code, country_name):
     """지정된 '한 국가'에 대한 데이터를 수집하여 딕셔너리로 반환합니다."""
     report_data = {
-        "인터넷 상태": check_cloudflare_outages(country_code),
+        "인터넷 상태": check_internet_news(country_code, country_name),
         "날씨 특보": get_weather_info(country_code),
         "공휴일": check_for_holidays(country_code),
         "지진 (규모 4.5+)": check_for_earthquakes(country_code, country_name),
-        "관련 뉴스 헤드라인": get_comprehensive_news(country_code, country_name)
+        "기타 주요 뉴스": get_comprehensive_news(country_code, country_name)
     }
     return report_data
 
-# -----------------------------------------------------------------
-# (F) [수정됨] Slack Block Kit을 사용하여 메시지를 보내는 함수
-# -----------------------------------------------------------------
+# (F) Slack Block Kit을 사용하여 메시지를 보내는 함수
 def send_to_slack(blocks):
     """Block Kit 블록 리스트를 받아 Slack으로 메시지를 전송합니다."""
     webhook_url = os.environ.get("SLACK_WEBHOOK_URL")
     if not webhook_url: return False
-    
     payload = {"blocks": blocks}
     headers = {'Content-Type': 'application/json'}
     try:
@@ -182,25 +178,19 @@ def send_to_slack(blocks):
         print(f"  ❌ 메시지 전송 실패: {e}")
         return False
 
-# -----------------------------------------------------------------
-# (G) [수정됨] 메인 실행 부분
-# -----------------------------------------------------------------
+# (G) 메인 실행 부분
 print("리포트 생성을 시작합니다...")
-
-# 1. 모든 국가의 상세 데이터를 먼저 수집합니다.
 all_reports_data = []
 for code, name in CITIES.items():
     print(f"--- {name} ({code}) 데이터 수집 중 ---")
     data = get_report_data(code, name)
     all_reports_data.append({'code': code, 'name': name, 'data': data})
 
-# 2. 수집된 전체 데이터를 바탕으로 Gemini 요약을 생성합니다.
 full_report_text_for_summary = ""
 for report in all_reports_data:
     details = COUNTRY_DETAILS.get(report['code'], {})
     name_ko = details.get('name_ko', report['name'])
     flag = details.get('flag', '🌐')
-    
     report_section = [f"*{flag} {name_ko} ({report['code']})*"]
     for title, content in report['data'].items():
         if content:
@@ -210,7 +200,6 @@ for report in all_reports_data:
 print("\nGemini API로 요약 생성 중...")
 summary = get_summary_from_gemini(full_report_text_for_summary)
 
-# 3. Slack으로 요약 리포트 전송
 today_str = datetime.now().strftime("%Y-%m-%d")
 summary_blocks = [
     {"type": "header", "text": {"type": "plain_text", "text": f"🚨 글로벌 종합 모니터링 리포트 ({today_str})", "emoji": True}},
@@ -219,7 +208,6 @@ summary_blocks = [
 print("\nSlack으로 요약 리포트를 전송합니다...")
 send_to_slack(summary_blocks)
 
-# 4. 각 국가별 상세 리포트를 '카드' 형태로 순차 전송
 print("\n국가별 상세 리포트를 전송합니다...")
 for report in all_reports_data:
     details = COUNTRY_DETAILS.get(report['code'], {})
@@ -232,13 +220,9 @@ for report in all_reports_data:
     ]
     
     for title, content in report['data'].items():
-        if content and content.strip() and "(API 키 없음)" not in content and "조회 에러" not in content : # 내용이 있는 경우에만 블록 추가
-            country_blocks.append({
-                "type": "section",
-                "text": {"type": "mrkdwn", "text": f"*{title}:*\n{content}"}
-            })
+        if content and content.strip() and "(API 키 없음)" not in content and "조회 에러" not in content :
+            country_blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": f"*{title}:*\n{content}"}})
     
-    # 국가별로 블록을 만들어 전송
     send_to_slack(country_blocks)
 
 print("\n✅ 모든 작업 완료!")
