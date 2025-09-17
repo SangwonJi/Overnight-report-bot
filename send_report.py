@@ -14,11 +14,12 @@ except ImportError:
 # (A) 모니터링할 국가, 도시, 대륙 목록
 CITIES = { 'IQ': 'Iraq', 'TR': 'Turkey', 'PK': 'Pakistan', 'EG': 'Egypt', 'RU': 'Russia', 'ID': 'Indonesia', 'SA': 'Saudi Arabia', 'UZ': 'Uzbekistan', 'US': 'United States', 'VN': 'Vietnam', 'DE': 'Germany', 'HK': 'Hong Kong' }
 COUNTRY_DETAILS = { 'IQ': {'name_ko': '이라크', 'flag': '🇮🇶'}, 'TR': {'name_ko': '터키', 'flag': '🇹🇷'}, 'PK': {'name_ko': '파키스탄', 'flag': '🇵🇰'}, 'EG': {'name_ko': '이집트', 'flag': '🇪🇬'}, 'RU': {'name_ko': '러시아', 'flag': '🇷🇺'}, 'ID': {'name_ko': '인도네시아', 'flag': '🇮🇩'}, 'SA': {'name_ko': '사우디아라비아', 'flag': '🇸🇦'}, 'UZ': {'name_ko': '우즈베키스탄', 'flag': '🇺🇿'}, 'US': {'name_ko': '미국', 'flag': '🇺🇸'}, 'VN': {'name_ko': '베트남', 'flag': '🇻🇳'}, 'DE': {'name_ko': '독일', 'flag': '🇩🇪'}, 'HK': {'name_ko': '홍콩', 'flag': '🇭🇰'} }
-CONTINENTS = ["Middle East", "Europe", "Asia", "North America"] # [새로 추가]
+CONTINENTS = ["Middle East", "Europe", "Asia", "North America"]
 
 # (B) GNews에서 검색할 키워드 목록
 NEWS_KEYWORDS = [ "protest", "accident", "incident", "disaster", "unrest", "riot", "war", "conflict", "attack", "military", "clash", "rebellion", "uprising", "flood", "earthquake" ]
 INTERNET_KEYWORDS = ["internet outage", "blackout", "power outage", "submarine cable", "network failure", "isp down"]
+IGNORE_PHRASES = [ "관련 뉴스 없음", "주요 지진 없음", "예정된 공휴일 없음", "보고된 주요 인터넷 이벤트 없음", "보고된 트래픽 이상 징후 없음" ]
 
 # (C) Gemini API를 이용한 자동 번역 함수
 def translate_text_with_gemini(text_to_translate, context="weather alert"):
@@ -127,28 +128,32 @@ def get_comprehensive_news(country_code, country_name):
         if not articles: return "관련 뉴스 없음"
         news_info = ""
         for article in articles:
-            news_info += f"• {article.get('title', '')}\n"
+            title = article.get('title', '')
+            # [수정됨] 기타 주요 뉴스도 번역
+            translated_title = translate_text_with_gemini(title, context="news")
+            news_info += f"• {translated_title}\n"
         return news_info
     except Exception as e:
         return f"뉴스 수집 중 에러 발생: {e}"
 
 def get_continental_news(continent_name):
-    """[새로운 기능] GNews API로 대륙별 주요 뉴스를 검색합니다."""
+    """[수정됨] GNews API로 대륙별 뉴스를 검색하고 번역합니다."""
     try:
         api_key = os.environ.get("GNEWS_API_KEY")
         if not api_key: return "(API 키 없음)"
-        # '기타 주요 뉴스'와 키워드 중복을 피하기 위해 일부만 사용
         continental_keywords = ["protest", "disaster", "war", "conflict", "internet outage"]
         query_keywords = " OR ".join(f'"{k}"' for k in continental_keywords)
         query = f'"{continent_name}" AND ({query_keywords})'
-        
         url = f"https://gnews.io/api/v4/search?q={query}&lang=en&max=3&token={api_key}"
         response = requests.get(url, timeout=10).json()
         articles = response.get('articles', [])
         if not articles: return "관련 뉴스 없음"
         news_info = ""
         for article in articles:
-            news_info += f"• {article.get('title', '')}\n"
+            title = article.get('title', '')
+            # [수정됨] 대륙별 뉴스도 번역
+            translated_title = translate_text_with_gemini(title, context="news")
+            news_info += f"• {translated_title}\n"
         return news_info
     except Exception as e:
         return f"대륙별 뉴스 수집 중 에러: {e}"
@@ -170,7 +175,7 @@ def get_summary_from_gemini(report_text):
         if "429" in str(e): return "* (요약 생성 실패: API 일일 사용량을 초과했습니다.)"
         return f"* (요약 생성 중 에러 발생: {e})"
 
-# (E) 보고서 데이터를 '딕셔-너리'로 생성하는 함수
+# (E) 보고서 데이터를 '딕셔너리'로 생성하는 함수
 def get_report_data(country_code, country_name):
     report_data = {
         "인터넷 상태": check_internet_news(country_code, country_name),
@@ -226,31 +231,12 @@ summary_blocks = [
 print("\nSlack으로 요약 리포트를 전송합니다...")
 send_to_slack(summary_blocks)
 
-print("\n국가별 상세 리포트를 전송합니다...")
-for report in all_reports_data:
-    details = COUNTRY_DETAILS.get(report['code'], {})
-    name_ko = details.get('name_ko', report['name'])
-    flag = details.get('flag', '🌐')
-    
-    country_blocks = [
-        {"type": "divider"},
-        {"type": "section", "text": {"type": "mrkdwn", "text": f"*{flag} {name_ko} ({report['code']})*"}}
-    ]
-    
-    for title, content in report['data'].items():
-        if content and content.strip() and "(API 키 없음)" not in content and "조회 에러" not in content :
-            country_blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": f"*{title}:*\n{content}"}})
-    
-    if len(country_blocks) > 2:
-        send_to_slack(country_blocks)
-
-# [새로 추가됨] 대륙별 뉴스 리포트 생성 및 전송
 print("\n대륙별 뉴스를 전송합니다...")
 continental_news_parts = []
 for continent in CONTINENTS:
     news = get_continental_news(continent)
-    if news != "관련 뉴스 없음":
-        continental_news_parts.append(f"*{continent} 주요 뉴스:*\n{news}")
+    if news and news != "관련 뉴스 없음" and "(API 키 없음)" not in news:
+        continental_news_parts.append(f"*{continent}:*\n{news}")
 
 if continental_news_parts:
     continental_blocks = [
@@ -259,5 +245,38 @@ if continental_news_parts:
         {"type": "section", "text": {"type": "mrkdwn", "text": "\n\n".join(continental_news_parts)}}
     ]
     send_to_slack(continental_blocks)
+
+print("\n특이사항 국가 상세 리포트를 전송합니다...")
+noteworthy_reports_found = False
+for report in all_reports_data:
+    has_noteworthy_issue = False
+    for title, content in report['data'].items():
+        if content and content not in IGNORE_PHRASES and "특보 없음" not in content:
+            has_noteworthy_issue = True
+            break
+    
+    if has_noteworthy_issue:
+        if not noteworthy_reports_found:
+            send_to_slack([{"type": "header", "text": {"type": "plain_text", "text": "📍 국가별 상세 리포트", "emoji": True}}])
+            noteworthy_reports_found = True
+
+        details = COUNTRY_DETAILS.get(report['code'], {})
+        name_ko = details.get('name_ko', report['name'])
+        flag = details.get('flag', '🌐')
+        
+        country_blocks = [
+            {"type": "divider"},
+            {"type": "section", "text": {"type": "mrkdwn", "text": f"*{flag} {name_ko} ({report['code']})*"}}
+        ]
+        
+        for title, content in report['data'].items():
+            if content and content.strip() and "(API 키 없음)" not in content and "조회 에러" not in content :
+                country_blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": f"*{title}:*\n{content}"}})
+        
+        if len(country_blocks) > 2:
+            send_to_slack(country_blocks)
+
+if not noteworthy_reports_found:
+    send_to_slack([{"type": "section", "text": {"type": "mrkdwn", "text": "✅ 모든 국가에서 특이사항이 발견되지 않았습니다."}}])
 
 print("\n✅ 모든 작업 완료!")
