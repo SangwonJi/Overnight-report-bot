@@ -42,7 +42,6 @@ def translate_text_with_gemini(text_to_translate, context="weather alert"):
 
 # (D) 데이터 수집 함수들
 def check_internet_news(country_code, country_name):
-    """[수정됨] GNews API로 인터넷 관련 뉴스를 검색하고, 번역 후 링크를 추가합니다."""
     try:
         api_key = os.environ.get("GNEWS_API_KEY")
         if not api_key: return "(API 키 없음)"
@@ -57,7 +56,6 @@ def check_internet_news(country_code, country_name):
             title = article.get('title', '')
             article_url = article.get('url', '')
             translated_title = translate_text_with_gemini(title, context="news")
-            # [수정됨] Slack 링크 형식 <URL|Text> 적용
             news_info += f"🌐 <{article_url}|{translated_title}>\n"
         return news_info
     except Exception as e:
@@ -120,7 +118,6 @@ def check_for_earthquakes(country_code, country_name):
     except Exception: return "조회 에러"
 
 def get_comprehensive_news(country_code, country_name):
-    """[수정됨] GNews API로 뉴스를 검색하고, 번역 후 링크를 추가합니다."""
     try:
         api_key = os.environ.get("GNEWS_API_KEY")
         if not api_key: return "(API 키 없음)"
@@ -135,14 +132,12 @@ def get_comprehensive_news(country_code, country_name):
             title = article.get('title', '')
             article_url = article.get('url', '')
             translated_title = translate_text_with_gemini(title, context="news")
-            # [수정됨] Slack 링크 형식 <URL|Text> 적용
             news_info += f"• <{article_url}|{translated_title}>\n"
         return news_info
     except Exception as e:
         return f"뉴스 수집 중 에러 발생: {e}"
 
 def get_continental_news(continent_name):
-    """[수정됨] GNews API로 대륙별 뉴스를 검색하고, 번역 후 링크를 추가합니다."""
     try:
         api_key = os.environ.get("GNEWS_API_KEY")
         if not api_key: return "(API 키 없음)"
@@ -158,7 +153,6 @@ def get_continental_news(continent_name):
             title = article.get('title', '')
             article_url = article.get('url', '')
             translated_title = translate_text_with_gemini(title, context="news")
-            # [수정됨] Slack 링크 형식 <URL|Text> 적용
             news_info += f"• <{article_url}|{translated_title}>\n"
         return news_info
     except Exception as e:
@@ -207,18 +201,33 @@ def send_to_slack(blocks):
         print(f"  ❌ 메시지 전송 실패: {e}")
         return False
 
-# (G) 특이사항을 판단하는 헬퍼 함수
+# -----------------------------------------------------------------
+# [수정됨] 특이사항을 판단하는 헬퍼 함수
+# -----------------------------------------------------------------
 def is_content_noteworthy(content):
+    """주어진 내용이 특이사항에 해당하는지 판단합니다."""
     if not content or not content.strip():
         return False
+    
     clean_content = content.strip()
+    
+    # 무시할 기본 메시지 목록에 포함되는지 확인
     if clean_content in IGNORE_PHRASES:
         return False
+    
+    # '특보 없음' 문구가 포함되는지 확인
     if "특보 없음" in clean_content:
         return False
+    
+    # [수정됨] '에러'가 포함된 메시지도 특이사항이 아닌 것으로 간주
+    if "에러" in clean_content:
+        return False
+        
     return True
 
-# (H) 메인 실행 부분
+# -----------------------------------------------------------------
+# (G) 메인 실행 부분
+# -----------------------------------------------------------------
 print("리포트 생성을 시작합니다...")
 all_reports_data = []
 for code, name in CITIES.items():
@@ -226,6 +235,7 @@ for code, name in CITIES.items():
     data = get_report_data(code, name)
     all_reports_data.append({'code': code, 'name': name, 'data': data})
 
+# 요약을 위한 전체 텍스트 생성
 full_report_text_for_summary = ""
 for report in all_reports_data:
     if any(is_content_noteworthy(content) for content in report['data'].values()):
@@ -241,6 +251,7 @@ for report in all_reports_data:
 print("\nGemini API로 요약 생성 중...")
 summary = get_summary_from_gemini(full_report_text_for_summary)
 
+# Slack으로 요약 리포트 전송
 today_str = datetime.now().strftime("%Y-%m-%d")
 summary_blocks = [
     {"type": "header", "text": {"type": "plain_text", "text": f"🚨 글로벌 종합 모니터링 리포트 ({today_str})", "emoji": True}},
@@ -249,6 +260,7 @@ summary_blocks = [
 print("\nSlack으로 요약 리포트를 전송합니다...")
 send_to_slack(summary_blocks)
 
+# 대륙별 뉴스 리포트 생성 및 전송
 print("\n대륙별 뉴스를 전송합니다...")
 continental_news_parts = []
 for continent in CONTINENTS:
@@ -264,6 +276,7 @@ if continental_news_parts:
     ]
     send_to_slack(continental_blocks)
 
+# 특이사항이 있는 국가만 상세 리포트 전송
 print("\n특이사항 국가 상세 리포트를 전송합니다...")
 noteworthy_reports_found = False
 for report in all_reports_data:
