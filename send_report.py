@@ -9,6 +9,7 @@ try:
     from dotenv import load_dotenv
     load_dotenv()
 except ImportError:
+    # GitHub Actions 환경에서는 이 라이브러리가 없어도 괜찮으므로 아무것도 하지 않습니다.
     pass
 
 # (A) 모니터링할 국가, 도시, 대륙 목록
@@ -201,33 +202,21 @@ def send_to_slack(blocks):
         print(f"  ❌ 메시지 전송 실패: {e}")
         return False
 
-# -----------------------------------------------------------------
-# [수정됨] 특이사항을 판단하는 헬퍼 함수
-# -----------------------------------------------------------------
+# (G) 특이사항을 판단하는 헬퍼 함수
 def is_content_noteworthy(content):
-    """주어진 내용이 특이사항에 해당하는지 판단합니다."""
     if not content or not content.strip():
         return False
     
     clean_content = content.strip()
-    
-    # 무시할 기본 메시지 목록에 포함되는지 확인
     if clean_content in IGNORE_PHRASES:
         return False
-    
-    # '특보 없음' 문구가 포함되는지 확인
     if "특보 없음" in clean_content:
         return False
-    
-    # [수정됨] '에러'가 포함된 메시지도 특이사항이 아닌 것으로 간주
     if "에러" in clean_content:
         return False
-        
     return True
 
-# -----------------------------------------------------------------
-# (G) 메인 실행 부분
-# -----------------------------------------------------------------
+# (H) 메인 실행 부분
 print("리포트 생성을 시작합니다...")
 all_reports_data = []
 for code, name in CITIES.items():
@@ -251,7 +240,6 @@ for report in all_reports_data:
 print("\nGemini API로 요약 생성 중...")
 summary = get_summary_from_gemini(full_report_text_for_summary)
 
-# Slack으로 요약 리포트 전송
 today_str = datetime.now().strftime("%Y-%m-%d")
 summary_blocks = [
     {"type": "header", "text": {"type": "plain_text", "text": f"🚨 글로벌 종합 모니터링 리포트 ({today_str})", "emoji": True}},
@@ -260,7 +248,6 @@ summary_blocks = [
 print("\nSlack으로 요약 리포트를 전송합니다...")
 send_to_slack(summary_blocks)
 
-# 대륙별 뉴스 리포트 생성 및 전송
 print("\n대륙별 뉴스를 전송합니다...")
 continental_news_parts = []
 for continent in CONTINENTS:
@@ -276,7 +263,6 @@ if continental_news_parts:
     ]
     send_to_slack(continental_blocks)
 
-# 특이사항이 있는 국가만 상세 리포트 전송
 print("\n특이사항 국가 상세 리포트를 전송합니다...")
 noteworthy_reports_found = False
 for report in all_reports_data:
