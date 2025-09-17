@@ -54,8 +54,10 @@ def check_internet_news(country_code, country_name):
         news_info = ""
         for article in articles:
             title = article.get('title', '')
+            url = article.get('url', '')
             translated_title = translate_text_with_gemini(title, context="news")
-            news_info += f"🌐 {translated_title}\n"
+            # [수정됨] Slack 링크 형식 <URL|Text> 적용
+            news_info += f"🌐 <{url}|{translated_title}>\n"
         return news_info
     except Exception as e:
         return f"인터넷 뉴스 수집 중 에러: {e}"
@@ -129,15 +131,15 @@ def get_comprehensive_news(country_code, country_name):
         news_info = ""
         for article in articles:
             title = article.get('title', '')
-            # [수정됨] 기타 주요 뉴스도 번역
+            url = article.get('url', '')
             translated_title = translate_text_with_gemini(title, context="news")
-            news_info += f"• {translated_title}\n"
+            # [수정됨] Slack 링크 형식 <URL|Text> 적용
+            news_info += f"• <{url}|{translated_title}>\n"
         return news_info
     except Exception as e:
         return f"뉴스 수집 중 에러 발생: {e}"
 
 def get_continental_news(continent_name):
-    """[수정됨] GNews API로 대륙별 뉴스를 검색하고 번역합니다."""
     try:
         api_key = os.environ.get("GNEWS_API_KEY")
         if not api_key: return "(API 키 없음)"
@@ -151,9 +153,10 @@ def get_continental_news(continent_name):
         news_info = ""
         for article in articles:
             title = article.get('title', '')
-            # [수정됨] 대륙별 뉴스도 번역
+            url = article.get('url', '')
             translated_title = translate_text_with_gemini(title, context="news")
-            news_info += f"• {translated_title}\n"
+            # [수정됨] Slack 링크 형식 <URL|Text> 적용
+            news_info += f"• <{url}|{translated_title}>\n"
         return news_info
     except Exception as e:
         return f"대륙별 뉴스 수집 중 에러: {e}"
