@@ -9,7 +9,6 @@ try:
     from dotenv import load_dotenv
     load_dotenv()
 except ImportError:
-    # GitHub Actions 환경에서는 이 라이브러리가 없어도 괜찮으므로 아무것도 하지 않습니다.
     pass
 
 # (A) 모니터링할 국가, 도시, 대륙 목록
@@ -18,7 +17,7 @@ COUNTRY_DETAILS = { 'IQ': {'name_ko': '이라크', 'flag': '🇮🇶'}, 'TR': {'
 CONTINENTS = ["Middle East", "Europe", "Asia", "North America"]
 
 # (B) GNews에서 검색할 키워드 목록
-NEWS_KEYWORDS = [ "protest", "accident", "incident", "disaster", "unrest", "riot", "war", "conflict", "attack", "military", "clash", "rebellion", "uprising", "flood", "earthquake", "explosion" ]
+NEWS_KEYWORDS = [ "protest", "accident", "incident", "disaster", "unrest", "riot", "war", "conflict", "attack", "military", "clash", "rebellion", "uprising", "flood", "earthquake" ]
 INTERNET_KEYWORDS = ["internet outage", "blackout", "power outage", "submarine cable", "network failure", "isp down"]
 IGNORE_PHRASES = [ "관련 뉴스 없음", "주요 지진 없음", "예정된 공휴일 없음", "보고된 주요 인터넷 이벤트 없음", "보고된 트래픽 이상 징후 없음" ]
 
@@ -102,6 +101,7 @@ def check_for_holidays(country_code):
     except Exception: return "조회 에러"
 
 def check_for_earthquakes(country_code, country_name):
+    """[수정됨] 규모 6.0 이상의 지진만 필터링하여 표시합니다."""
     try:
         url = "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/4.5_day.geojson"
         response = requests.get(url, timeout=10).json()
@@ -109,12 +109,16 @@ def check_for_earthquakes(country_code, country_name):
         earthquake_info = ""
         kst = timezone(timedelta(hours=9))
         for eq in features:
-            place = eq['properties']['place']
-            if country_name.lower() in place.lower() or f" {country_code.upper()}" in place.upper():
-                mag = eq['properties']['mag']
-                time_utc = datetime.fromtimestamp(eq['properties']['time'] / 1000, tz=timezone.utc)
-                time_kst = time_utc.astimezone(kst).strftime('%Y-%m-%d %H:%M KST')
-                earthquake_info += f"⚠️ *규모 {mag} ({time_kst}):* {place}\n"
+            mag = eq.get('properties', {}).get('mag')
+            
+            # [수정됨] 규모가 6.0 이상인 경우에만 리포트에 추가
+            if mag is not None and mag >= 6.0:
+                place = eq.get('properties', {}).get('place', 'N/A')
+                if country_name.lower() in place.lower() or f" {country_code.upper()}" in place.upper():
+                    time_utc = datetime.fromtimestamp(eq['properties']['time'] / 1000, tz=timezone.utc)
+                    time_kst = time_utc.astimezone(kst).strftime('%Y-%m-%d %H:%M KST')
+                    earthquake_info += f"⚠️ *규모 {mag} ({time_kst}):* {place}\n"
+        
         return earthquake_info if earthquake_info else "주요 지진 없음"
     except Exception: return "조회 에러"
 
@@ -182,7 +186,7 @@ def get_report_data(country_code, country_name):
         "인터넷 상태": check_internet_news(country_code, country_name),
         "날씨 특보": get_weather_info(country_code),
         "공휴일": check_for_holidays(country_code),
-        "지진 (규모 4.5+)": check_for_earthquakes(country_code, country_name),
+        "지진 (규모 6.0+)": check_for_earthquakes(country_code, country_name), # 제목도 6.0+로 변경
         "기타 주요 뉴스": get_comprehensive_news(country_code, country_name)
     }
     return report_data
@@ -206,7 +210,6 @@ def send_to_slack(blocks):
 def is_content_noteworthy(content):
     if not content or not content.strip():
         return False
-    
     clean_content = content.strip()
     if clean_content in IGNORE_PHRASES:
         return False
