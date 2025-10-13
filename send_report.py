@@ -2,14 +2,12 @@ import os
 import requests
 import json
 from datetime import date, timedelta, datetime, timezone
-import google.generativeai as genai
 
 # .env 파일을 읽어와 환경 변수로 설정합니다. (로컬 테스트용)
 try:
     from dotenv import load_dotenv
     load_dotenv()
 except ImportError:
-    # GitHub Actions 환경에서는 이 라이브러리가 없어도 괜찮으므로 아무것도 하지 않습니다.
     pass
 
 # (A) 모니터링할 국가, 도시, 대륙 목록
@@ -22,24 +20,45 @@ NEWS_KEYWORDS = [ "protest", "accident", "incident", "disaster", "unrest", "riot
 INTERNET_KEYWORDS = ["internet outage", "blackout", "power outage", "submarine cable", "network failure", "isp down"]
 IGNORE_PHRASES = [ "관련 뉴스 없음", "주요 지진 없음", "예정된 공휴일 없음", "보고된 주요 인터넷 이벤트 없음", "보고된 트래픽 이상 징후 없음" ]
 
-# (C) Gemini API를 이용한 자동 번역 함수
-def translate_text_with_gemini(text_to_translate, context="weather alert"):
-    try:
-        api_key = os.environ.get("GEMINI_API_KEY")
-        if not api_key: return f"{text_to_translate} (번역 실패: API 키 없음)"
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-pro')
-        
-        if context == "news":
-            prompt = f"""Translate the following news headline into Korean. Do not add any explanation, romanization, or markdown formatting. Input: '{text_to_translate}'"""
-        else:
-            prompt = f"""Translate the following single weather alert term into a single, official Korean equivalent. Do not add any explanation, romanization, or markdown formatting. For example, if the input is "Thunderstorm gale", the output should be just "뇌우 강풍". Input: '{text_to_translate}'"""
+# (C) [수정됨] Gemini API를 requests로 직접 호출하는 번역 함수
+def call_gemini_api(prompt):
+    """Gemini API를 직접 호출하여 결과를 반환하는 통합 함수."""
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        return None, "(API 키 없음)"
 
-        response = model.generate_content(prompt)
-        return response.text.strip().replace("*", "")
+    url = f"https://generativelanguage.googleapis.com/v1/models/gemini-pro:generateContent?key={api_key}"
+    headers = {'Content-Type': 'application/json'}
+    data = {"contents": [{"parts": [{"text": prompt}]}]}
+
+    try:
+        response = requests.post(url, headers=headers, json=data, timeout=20)
+        response.raise_for_status()
+        response_json = response.json()
+        
+        # API 응답 구조에 따라 텍스트 추출
+        candidates = response_json.get('candidates', [])
+        if candidates and 'content' in candidates[0] and 'parts' in candidates[0]['content']:
+            return candidates[0]['content']['parts'][0].get('text', '').strip(), None
+        else:
+            # 예상치 못한 응답 구조일 경우
+            return None, f"API 응답 구조 오류: {response_json}"
+            
+    except requests.exceptions.RequestException as e:
+        return None, f"API 요청 실패: {e}"
     except Exception as e:
-        if "429" in str(e): return f"(번역 한도 초과)"
+        return None, f"알 수 없는 에러: {e}"
+
+def translate_text_with_gemini(text_to_translate, context="weather alert"):
+    if context == "news":
+        prompt = f"""Translate the following news headline into Korean. Do not add any explanation, romanization, or markdown formatting. Input: '{text_to_translate}'"""
+    else:
+        prompt = f"""Translate the following single weather alert term into a single, official Korean equivalent. Do not add any explanation, romanization, or markdown formatting. For example, if the input is "Thunderstorm gale", the output should be just "뇌우 강풍". Input: '{text_to_translate}'"""
+
+    result, error = call_gemini_api(prompt)
+    if error:
         return f"{text_to_translate} (번역 에러)"
+    return result.replace("*", "") if result else f"{text_to_translate} (번역 결과 없음)"
 
 # (D) 데이터 수집 함수들
 def check_internet_news(country_code, country_name):
@@ -102,7 +121,6 @@ def check_for_holidays(country_code):
     except Exception: return "조회 에러"
 
 def check_for_earthquakes(country_code, country_name):
-    """규모 6.0 이상의 지진만 필터링하여 표시합니다."""
     try:
         url = "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/4.5_day.geojson"
         response = requests.get(url, timeout=10).json()
@@ -162,21 +180,16 @@ def get_continental_news(continent_name):
         return f"대륙별 뉴스 수집 중 에러: {e}"
 
 def get_summary_from_gemini(report_text):
-    try:
-        api_key = os.environ.get("GEMINI_API_KEY")
-        if not api_key: return "* (요약/번역 기능 비활성화: Gemini API 키 없음)"
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-pro')
-        prompt = f"""You are an analyst summarizing overnight global events for a mobile game manager. Based on the following raw report, please create a concise summary in Korean with a maximum of 3 bullet points.
-        Please use a hyphen (-) for bullet points, not an asterisk (*).
-        Focus only on the most critical issues that could impact game traffic. If there are no significant events, simply state that.
+    prompt = f"""You are an analyst summarizing overnight global events for a mobile game manager. Based on the following raw report, please create a concise summary in Korean with a maximum of 3 bullet points.
+    Please use a hyphen (-) for bullet points, not an asterisk (*).
+    Focus only on the most critical issues that could impact game traffic. If there are no significant events, simply state that.
 
-        Raw Report: --- {report_text} --- Summary:"""
-        response = model.generate_content(prompt)
-        return response.text.strip()
-    except Exception as e:
-        if "429" in str(e): return "* (요약 생성 실패: API 일일 사용량을 초과했습니다.)"
-        return f"* (요약 생성 중 에러 발생: {e})"
+    Raw Report: --- {report_text} --- Summary:"""
+    
+    result, error = call_gemini_api(prompt)
+    if error:
+        return f"* (요약 생성 중 에러 발생: {error})"
+    return result if result else "* (요약 생성 결과 없음)"
 
 # (E) 보고서 데이터를 '딕셔너리'로 생성하는 함수
 def get_report_data(country_code, country_name):
