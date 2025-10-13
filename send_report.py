@@ -27,7 +27,6 @@ def translate_text_with_gemini(text_to_translate, context="weather alert"):
         api_key = os.environ.get("GEMINI_API_KEY")
         if not api_key: return f"{text_to_translate} (번역 실패: API 키 없음)"
         genai.configure(api_key=api_key)
-        # [수정됨] 안정적인 모델 이름으로 변경
         model = genai.GenerativeModel('gemini-pro')
         
         if context == "news":
@@ -102,6 +101,7 @@ def check_for_holidays(country_code):
     except Exception: return "조회 에러"
 
 def check_for_earthquakes(country_code, country_name):
+    """규모 6.0 이상의 지진만 필터링하여 표시합니다."""
     try:
         url = "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/4.5_day.geojson"
         response = requests.get(url, timeout=10).json()
@@ -109,12 +109,13 @@ def check_for_earthquakes(country_code, country_name):
         earthquake_info = ""
         kst = timezone(timedelta(hours=9))
         for eq in features:
-            place = eq['properties']['place']
-            if country_name.lower() in place.lower() or f" {country_code.upper()}" in place.upper():
-                mag = eq['properties']['mag']
-                time_utc = datetime.fromtimestamp(eq['properties']['time'] / 1000, tz=timezone.utc)
-                time_kst = time_utc.astimezone(kst).strftime('%Y-%m-%d %H:%M KST')
-                earthquake_info += f"⚠️ *규모 {mag} ({time_kst}):* {place}\n"
+            mag = eq.get('properties', {}).get('mag')
+            if mag is not None and mag >= 6.0:
+                place = eq.get('properties', {}).get('place', 'N/A')
+                if country_name.lower() in place.lower() or f" {country_code.upper()}" in place.upper():
+                    time_utc = datetime.fromtimestamp(eq['properties']['time'] / 1000, tz=timezone.utc)
+                    time_kst = time_utc.astimezone(kst).strftime('%Y-%m-%d %H:%M KST')
+                    earthquake_info += f"⚠️ *규모 {mag} ({time_kst}):* {place}\n"
         return earthquake_info if earthquake_info else "주요 지진 없음"
     except Exception: return "조회 에러"
 
@@ -164,7 +165,6 @@ def get_summary_from_gemini(report_text):
         api_key = os.environ.get("GEMINI_API_KEY")
         if not api_key: return "* (요약/번역 기능 비활성화: Gemini API 키 없음)"
         genai.configure(api_key=api_key)
-        # [수정됨] 안정적인 모델 이름으로 변경
         model = genai.GenerativeModel('gemini-pro')
         prompt = f"""You are an analyst summarizing overnight global events for a mobile game manager. Based on the following raw report, please create a concise summary in Korean with a maximum of 3 bullet points.
         Please use a hyphen (-) for bullet points, not an asterisk (*).
@@ -183,7 +183,7 @@ def get_report_data(country_code, country_name):
         "인터넷 상태": check_internet_news(country_code, country_name),
         "날씨 특보": get_weather_info(country_code),
         "공휴일": check_for_holidays(country_code),
-        "지진 (규모 4.5+)": check_for_earthquakes(country_code, country_name),
+        "지진 (규모 6.0+)": check_for_earthquakes(country_code, country_name),
         "기타 주요 뉴스": get_comprehensive_news(country_code, country_name)
     }
     return report_data
@@ -222,74 +222,4 @@ all_reports_data = []
 for code, name in CITIES.items():
     print(f"--- {name} ({code}) 데이터 수집 중 ---")
     data = get_report_data(code, name)
-    all_reports_data.append({'code': code, 'name': name, 'data': data})
-
-# 요약을 위한 전체 텍스트 생성
-full_report_text_for_summary = ""
-for report in all_reports_data:
-    if any(is_content_noteworthy(content) for content in report['data'].values()):
-        details = COUNTRY_DETAILS.get(report['code'], {})
-        name_ko = details.get('name_ko', report['name'])
-        flag = details.get('flag', '🌐')
-        report_section = [f"*{flag} {name_ko} ({report['code']})*"]
-        for title, content in report['data'].items():
-            if content:
-                report_section.append(f"*{title}:*\n{content}")
-        full_report_text_for_summary += "\n".join(report_section) + "\n\n"
-
-print("\nGemini API로 요약 생성 중...")
-summary = get_summary_from_gemini(full_report_text_for_summary)
-
-today_str = datetime.now().strftime("%Y-%m-%d")
-summary_blocks = [
-    {"type": "header", "text": {"type": "plain_text", "text": f"🚨 글로벌 종합 모니터링 리포트 ({today_str})", "emoji": True}},
-    {"type": "section", "text": {"type": "mrkdwn", "text": f"*주요 이슈 요약:*\n{summary}"}}
-]
-print("\nSlack으로 요약 리포트를 전송합니다...")
-send_to_slack(summary_blocks)
-
-print("\n대륙별 뉴스를 전송합니다...")
-continental_news_parts = []
-for continent in CONTINENTS:
-    news = get_continental_news(continent)
-    if news and news != "관련 뉴스 없음" and "(API 키 없음)" not in news:
-        continental_news_parts.append(f"*{continent}:*\n{news}")
-
-if continental_news_parts:
-    continental_blocks = [
-        {"type": "divider"},
-        {"type": "header", "text": {"type": "plain_text", "text": "🗺️ 대륙별 주요 뉴스 요약", "emoji": True}},
-        {"type": "section", "text": {"type": "mrkdwn", "text": "\n\n".join(continental_news_parts)}}
-    ]
-    send_to_slack(continental_blocks)
-
-print("\n특이사항 국가 상세 리포트를 전송합니다...")
-noteworthy_reports_found = False
-for report in all_reports_data:
-    has_noteworthy_issue = any(is_content_noteworthy(content) for content in report['data'].values())
-    
-    if has_noteworthy_issue:
-        if not noteworthy_reports_found:
-            send_to_slack([{"type": "header", "text": {"type": "plain_text", "text": "📍 국가별 상세 리포트", "emoji": True}}])
-            noteworthy_reports_found = True
-
-        details = COUNTRY_DETAILS.get(report['code'], {})
-        name_ko = details.get('name_ko', report['name'])
-        flag = details.get('flag', '🌐')
-        
-        country_blocks = [
-            {"type": "divider"},
-            {"type": "section", "text": {"type": "mrkdwn", "text": f"*{flag} {name_ko} ({report['code']})*"}}
-        ]
-        
-        for title, content in report['data'].items():
-            if is_content_noteworthy(content):
-                country_blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": f"*{title}:*\n{content}"}})
-        
-        if len(country_blocks) > 2:
-            send_to_slack(country_blocks)
-
-if not noteworthy_reports_found:
-    send_to_slack([{"type": "section", "text": {"type": "mrkdwn", "text": "✅ 모든 모니터링 국가에서 특이사항이 발견되지 않았습니다."}}])
-
-print("\n✅ 모든 작업 완료!")
+    all_reports_data.append({'code': code, 'name': name, 'data': data
