@@ -27,7 +27,8 @@ def translate_text_with_gemini(text_to_translate, context="weather alert"):
         api_key = os.environ.get("GEMINI_API_KEY")
         if not api_key: return f"{text_to_translate} (번역 실패: API 키 없음)"
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-1.5-flash-latest')
+        # [수정됨] 안정적인 모델 이름으로 변경
+        model = genai.GenerativeModel('gemini-pro')
         
         if context == "news":
             prompt = f"""Translate the following news headline into Korean. Do not add any explanation, romanization, or markdown formatting. Input: '{text_to_translate}'"""
@@ -101,7 +102,6 @@ def check_for_holidays(country_code):
     except Exception: return "조회 에러"
 
 def check_for_earthquakes(country_code, country_name):
-    """[수정됨] 규모 6.0 이상의 지진만 필터링하여 표시합니다."""
     try:
         url = "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/4.5_day.geojson"
         response = requests.get(url, timeout=10).json()
@@ -109,16 +109,12 @@ def check_for_earthquakes(country_code, country_name):
         earthquake_info = ""
         kst = timezone(timedelta(hours=9))
         for eq in features:
-            mag = eq.get('properties', {}).get('mag')
-            
-            # [수정됨] 규모가 6.0 이상인 경우에만 리포트에 추가
-            if mag is not None and mag >= 6.0:
-                place = eq.get('properties', {}).get('place', 'N/A')
-                if country_name.lower() in place.lower() or f" {country_code.upper()}" in place.upper():
-                    time_utc = datetime.fromtimestamp(eq['properties']['time'] / 1000, tz=timezone.utc)
-                    time_kst = time_utc.astimezone(kst).strftime('%Y-%m-%d %H:%M KST')
-                    earthquake_info += f"⚠️ *규모 {mag} ({time_kst}):* {place}\n"
-        
+            place = eq['properties']['place']
+            if country_name.lower() in place.lower() or f" {country_code.upper()}" in place.upper():
+                mag = eq['properties']['mag']
+                time_utc = datetime.fromtimestamp(eq['properties']['time'] / 1000, tz=timezone.utc)
+                time_kst = time_utc.astimezone(kst).strftime('%Y-%m-%d %H:%M KST')
+                earthquake_info += f"⚠️ *규모 {mag} ({time_kst}):* {place}\n"
         return earthquake_info if earthquake_info else "주요 지진 없음"
     except Exception: return "조회 에러"
 
@@ -168,7 +164,8 @@ def get_summary_from_gemini(report_text):
         api_key = os.environ.get("GEMINI_API_KEY")
         if not api_key: return "* (요약/번역 기능 비활성화: Gemini API 키 없음)"
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-1.5-flash-latest')
+        # [수정됨] 안정적인 모델 이름으로 변경
+        model = genai.GenerativeModel('gemini-pro')
         prompt = f"""You are an analyst summarizing overnight global events for a mobile game manager. Based on the following raw report, please create a concise summary in Korean with a maximum of 3 bullet points.
         Please use a hyphen (-) for bullet points, not an asterisk (*).
         Focus only on the most critical issues that could impact game traffic. If there are no significant events, simply state that.
@@ -186,7 +183,7 @@ def get_report_data(country_code, country_name):
         "인터넷 상태": check_internet_news(country_code, country_name),
         "날씨 특보": get_weather_info(country_code),
         "공휴일": check_for_holidays(country_code),
-        "지진 (규모 6.0+)": check_for_earthquakes(country_code, country_name), # 제목도 6.0+로 변경
+        "지진 (규모 4.5+)": check_for_earthquakes(country_code, country_name),
         "기타 주요 뉴스": get_comprehensive_news(country_code, country_name)
     }
     return report_data
