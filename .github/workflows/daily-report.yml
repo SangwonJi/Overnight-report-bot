@@ -28,7 +28,7 @@ jobs:
       with:
         python-version: '3.10'
 
-    # 3. [수정됨] 필요한 라이브러리를 최신 버전으로 설치
+    # 3. 필요한 라이브러리를 최신 버전으로 설치
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
