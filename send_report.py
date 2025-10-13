@@ -27,24 +27,26 @@ def call_gemini_api(prompt):
     if not api_key:
         return None, "(API 키 없음)"
 
-    url = f"https://generativelanguage.googleapis.com/v1/models/gemini-pro:generateContent?key={api_key}"
+    # [수정됨] API 버전을 v1에서 올바른 v1beta로 변경
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key={api_key}"
     headers = {'Content-Type': 'application/json'}
     data = {"contents": [{"parts": [{"text": prompt}]}]}
 
     try:
-        response = requests.post(url, headers=headers, json=data, timeout=20)
+        response = requests.post(url, headers=headers, json=data, timeout=30)
         response.raise_for_status()
         response_json = response.json()
         
-        # API 응답 구조에 따라 텍스트 추출
         candidates = response_json.get('candidates', [])
         if candidates and 'content' in candidates[0] and 'parts' in candidates[0]['content']:
             return candidates[0]['content']['parts'][0].get('text', '').strip(), None
         else:
-            # 예상치 못한 응답 구조일 경우
             return None, f"API 응답 구조 오류: {response_json}"
             
     except requests.exceptions.RequestException as e:
+        # 429 에러 (한도 초과)를 명확하게 잡아서 표시
+        if e.response and e.response.status_code == 429:
+            return None, "API 한도 초과"
         return None, f"API 요청 실패: {e}"
     except Exception as e:
         return None, f"알 수 없는 에러: {e}"
@@ -56,7 +58,9 @@ def translate_text_with_gemini(text_to_translate, context="weather alert"):
         prompt = f"""Translate the following single weather alert term into a single, official Korean equivalent. Do not add any explanation, romanization, or markdown formatting. For example, if the input is "Thunderstorm gale", the output should be just "뇌우 강풍". Input: '{text_to_translate}'"""
 
     result, error = call_gemini_api(prompt)
-    if error:
+    if error == "API 한도 초과":
+        return "(번역 한도 초과)"
+    elif error:
         return f"{text_to_translate} (번역 에러)"
     return result.replace("*", "") if result else f"{text_to_translate} (번역 결과 없음)"
 
@@ -187,8 +191,10 @@ def get_summary_from_gemini(report_text):
     Raw Report: --- {report_text} --- Summary:"""
     
     result, error = call_gemini_api(prompt)
-    if error:
-        return f"* (요약 생성 중 에러 발생: {error})"
+    if error == "API 한도 초과":
+        return "* (요약 생성 실패: API 일일 사용량을 초과했습니다.)"
+    elif error:
+        return f"* (요약 생성 중 에러 발생)"
     return result if result else "* (요약 생성 결과 없음)"
 
 # (E) 보고서 데이터를 '딕셔너리'로 생성하는 함수
@@ -226,7 +232,7 @@ def is_content_noteworthy(content):
         return False
     if "특보 없음" in clean_content:
         return False
-    if "에러" in clean_content:
+    if "에러" in clean_content or "실패" in clean_content:
         return False
     return True
 
