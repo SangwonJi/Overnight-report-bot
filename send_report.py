@@ -2,6 +2,7 @@ import os
 import requests
 import json
 from datetime import date, timedelta, datetime, timezone
+import openai # OpenAI 라이브러리 임포트
 
 # .env 파일을 읽어와 환경 변수로 설정합니다. (로컬 테스트용)
 try:
@@ -20,48 +21,30 @@ NEWS_KEYWORDS = [ "protest", "accident", "incident", "disaster", "unrest", "riot
 INTERNET_KEYWORDS = ["internet outage", "blackout", "power outage", "submarine cable", "network failure", "isp down"]
 IGNORE_PHRASES = [ "관련 뉴스 없음", "주요 지진 없음", "예정된 공휴일 없음" ]
 
-# (C) [최종 수정] Gemini API를 requests로 직접 호출하는 번역 함수
-def call_gemini_api(prompt):
-    """Gemini API를 직접 호출하여 결과를 반환하는 통합 함수."""
-    api_key = os.environ.get("GEMINI_API_KEY")
-    if not api_key:
-        return None, "(API 키 없음)"
-
-    # 올바른 v1beta 엔드포인트 사용
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key={api_key}"
-    headers = {'Content-Type': 'application/json'}
-    data = {"contents": [{"parts": [{"text": prompt}]}]}
-
+# (C) [수정됨] OpenAI API를 이용한 자동 번역 함수
+def translate_text_with_openai(text_to_translate, context="weather alert"):
     try:
-        response = requests.post(url, headers=headers, json=data, timeout=30)
-        response.raise_for_status()
-        response_json = response.json()
+        api_key = os.environ.get("OPENAI_API_KEY")
+        if not api_key: return f"{text_to_translate} (번역 실패: API 키 없음)"
         
-        candidates = response_json.get('candidates', [])
-        if candidates and 'content' in candidates[0] and 'parts' in candidates[0]['content']:
-            return candidates[0]['content']['parts'][0].get('text', '').strip(), None
+        client = openai.OpenAI(api_key=api_key)
+
+        if context == "news":
+            prompt = f"""Translate the following news headline into Korean. Do not add any explanation, romanization, or markdown formatting. Input: '{text_to_translate}'"""
         else:
-            return None, f"API 응답 구조 오류"
-            
-    except requests.exceptions.RequestException as e:
-        if e.response is not None:
-            if e.response.status_code == 429:
-                return None, "API 한도 초과"
-            return None, f"API 요청 실패: {e.response.status_code}"
-        return None, f"API 연결 실패"
+            prompt = f"""Translate the following single weather alert term into a single, official Korean equivalent. Do not add any explanation, romanization, or markdown formatting. For example, if the input is "Thunderstorm gale", the output should be just "뇌우 강풍". Input: '{text_to_translate}'"""
+
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.2, # 번역에는 낮은 온도가 적합
+            max_tokens=100
+        )
+        translation = response.choices[0].message.content.strip()
+        return translation.replace("*", "")
     except Exception as e:
-        return None, f"알 수 없는 에러: {e}"
-
-def translate_text_with_gemini(text_to_translate, context="weather alert"):
-    if context == "news":
-        prompt = f"""Translate the following news headline into Korean. Do not add any explanation, romanization, or markdown formatting. Input: '{text_to_translate}'"""
-    else:
-        prompt = f"""Translate the following single weather alert term into a single, official Korean equivalent. Do not add any explanation, romanization, or markdown formatting. For example, if the input is "Thunderstorm gale", the output should be just "뇌우 강풍". Input: '{text_to_translate}'"""
-
-    result, error = call_gemini_api(prompt)
-    if error:
-        return f"{text_to_translate} (번역 에러)"
-    return result.replace("*", "") if result else f"{text_to_translate} (번역 결과 없음)"
+        # API 에러 메시지를 포함하여 반환
+        return f"{text_to_translate} (번역 에러: {e})"
 
 # (D) 데이터 수집 함수들
 def check_internet_news(country_code, country_name):
@@ -78,11 +61,11 @@ def check_internet_news(country_code, country_name):
         for article in articles:
             title = article.get('title', '')
             article_url = article.get('url', '')
-            translated_title = translate_text_with_gemini(title, context="news")
+            translated_title = translate_text_with_openai(title, context="news")
             news_info += f"🌐 <{article_url}|{translated_title}>\n"
         return news_info
-    except Exception as e:
-        return f"수집 중 에러: {e}"
+    except Exception:
+        return "수집 중 에러"
 
 def get_weather_info(country_code):
     try:
@@ -97,7 +80,7 @@ def get_weather_info(country_code):
         alert_info = ""
         unique_alerts = {alert.get('event') for alert in alerts}
         for event in unique_alerts:
-            translated_event = translate_text_with_gemini(event)
+            translated_event = translate_text_with_openai(event)
             alert_info += f"🚨 '{translated_event}' 특보 발령!\n"
         return alert_info.strip()
     except Exception: return "조회 에러"
@@ -155,7 +138,7 @@ def get_comprehensive_news(country_code, country_name):
         for article in articles:
             title = article.get('title', '')
             article_url = article.get('url', '')
-            translated_title = translate_text_with_gemini(title, context="news")
+            translated_title = translate_text_with_openai(title, context="news")
             news_info += f"• <{article_url}|{translated_title}>\n"
         return news_info
     except Exception:
@@ -176,23 +159,36 @@ def get_continental_news(continent_name):
         for article in articles:
             title = article.get('title', '')
             article_url = article.get('url', '')
-            translated_title = translate_text_with_gemini(title, context="news")
+            translated_title = translate_text_with_openai(title, context="news")
             news_info += f"• <{article_url}|{translated_title}>\n"
         return news_info
     except Exception:
         return "수집 중 에러"
 
-def get_summary_from_gemini(report_text):
-    prompt = f"""You are an analyst summarizing overnight global events for a mobile game manager. Based on the following raw report, please create a concise summary in Korean with a maximum of 3 bullet points.
-    Please use a hyphen (-) for bullet points, not an asterisk (*).
-    Focus only on the most critical issues that could impact game traffic. If there are no significant events, simply state that.
+def get_summary_from_openai(report_text):
+    """[수정됨] OpenAI API를 사용하는 요약 함수"""
+    try:
+        api_key = os.environ.get("OPENAI_API_KEY")
+        if not api_key: return "* (요약/번역 기능 비활성화: OpenAI API 키 없음)"
 
-    Raw Report: --- {report_text} --- Summary:"""
-    
-    result, error = call_gemini_api(prompt)
-    if error:
-        return f"* (요약 생성 중 에러: {error})"
-    return result if result else "* (요약 생성 결과 없음)"
+        client = openai.OpenAI(api_key=api_key)
+        prompt = f"""You are an analyst summarizing overnight global events for a mobile game manager. Based on the following raw report, please create a concise summary in Korean with a maximum of 3 bullet points.
+        Please use a hyphen (-) for bullet points, not an asterisk (*).
+        Focus only on the most critical issues that could impact game traffic. If there are no significant events, simply state that.
+
+        Raw Report: --- {report_text} --- Summary:"""
+
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.5,
+            max_tokens=500
+        )
+        summary = response.choices[0].message.content.strip()
+        return summary
+    except Exception as e:
+        # API 에러 메시지를 포함하여 반환
+        return f"* (요약 생성 중 에러 발생: {e})"
 
 # (E) 보고서 데이터를 '딕셔너리'로 생성하는 함수
 def get_report_data(country_code, country_name):
@@ -254,8 +250,8 @@ for report in all_reports_data:
                 report_section.append(f"*{title}:*\n{content}")
         full_report_text_for_summary += "\n".join(report_section) + "\n\n"
 
-print("\nGemini API로 요약 생성 중...")
-summary = get_summary_from_gemini(full_report_text_for_summary)
+print("\nOpenAI API로 요약 생성 중...")
+summary = get_summary_from_openai(full_report_text_for_summary) # [수정됨] OpenAI 함수 호출
 
 today_str = datetime.now().strftime("%Y-%m-%d")
 summary_blocks = [
