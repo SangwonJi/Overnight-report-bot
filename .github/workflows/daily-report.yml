@@ -1,10 +1,9 @@
-# 워크플로우의 이름
 name: Daily Global Issue Report
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 0 * * *'
+    - cron: '0 0 * * *' # 매일 UTC 0시 (한국 시간 오전 9시)
 
 jobs:
   send-report:
@@ -16,7 +15,6 @@ jobs:
         uses: actions/setup-python@v4
         with:
           python-version: '3.10'
-      # [수정됨] google-generativeai 관련 라인 제거
       - name: Install dependencies
         run: pip install -r requirements.txt
       - name: Run Python script to send report
@@ -25,5 +23,6 @@ jobs:
           WEATHERAPI_API_KEY: ${{ secrets.WEATHERAPI_API_KEY }}
           CALENDARIFIC_API_KEY: ${{ secrets.CALENDARIFIC_API_KEY }}
           GNEWS_API_KEY: ${{ secrets.GNEWS_API_KEY }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          # [수정됨] GEMINI_API_KEY 대신 OPENAI_API_KEY 전달
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: python send_report.py
